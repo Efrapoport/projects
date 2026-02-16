@@ -42,16 +42,23 @@ export function Dashboard() {
 
     try {
       params.set("_t", String(Date.now()));
-      const res = await fetch(`/api/leads?${params.toString()}`);
+      const url = `/api/leads?${params.toString()}`;
+      console.log(`[Dashboard] Fetching: ${url}`);
+      const res = await fetch(url);
+      console.log(`[Dashboard] Response status: ${res.status}, headers:`, Object.fromEntries(res.headers.entries()));
       const data: ApiResponse = await res.json();
+      console.log(`[Dashboard] API returned: total=${data.total}, filtered=${data.filtered}, dataSource=${data.dataSource}, leads=${data.leads?.length}`);
+      if (data.leads?.length > 0) {
+        console.log(`[Dashboard] Lead companies:`, data.leads.map((l: Lead) => l.company.name));
+      }
       setLeads(data.leads);
       setTotalLeads(data.total);
       setFilteredCount(data.filtered);
       setIndustries(data.industries);
       setDataSource(data.dataSource);
       setLastRefreshed(new Date());
-    } catch {
-      console.error("Failed to fetch leads");
+    } catch (err) {
+      console.error("[Dashboard] Failed to fetch leads:", err);
     } finally {
       setLoading(false);
     }
@@ -67,6 +74,11 @@ export function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* DEBUG BANNER — remove after debugging */}
+      <div className="bg-red-600 text-white px-4 py-2 text-xs font-mono">
+        DEBUG: leads={leads.length} | total={totalLeads} | dataSource={dataSource} | loading={String(loading)}
+        {leads.length > 0 && ` | companies: ${leads.map(l => l.company.name).join(", ")}`}
+      </div>
       {/* Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-30">
         <div className="max-w-[1600px] mx-auto px-4 py-3">
