@@ -13,6 +13,7 @@ interface ApiResponse {
   total: number;
   filtered: number;
   industries: string[];
+  dataSource: "live" | "mock";
 }
 
 export function Dashboard() {
@@ -24,8 +25,9 @@ export function Dashboard() {
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
+  const [dataSource, setDataSource] = useState<"live" | "mock">("mock");
 
-  const fetchLeads = useCallback(async () => {
+  const fetchLeads = useCallback(async (refresh = false) => {
     setLoading(true);
     const params = new URLSearchParams();
     params.set("timeframe", filters.timeframe);
@@ -36,6 +38,7 @@ export function Dashboard() {
     if (filters.minScore) params.set("minScore", String(filters.minScore));
     if (filters.sources.length)
       params.set("sources", filters.sources.join(","));
+    if (refresh) params.set("refresh", "true");
 
     try {
       const res = await fetch(`/api/leads?${params.toString()}`);
@@ -44,6 +47,7 @@ export function Dashboard() {
       setTotalLeads(data.total);
       setFilteredCount(data.filtered);
       setIndustries(data.industries);
+      setDataSource(data.dataSource);
       setLastRefreshed(new Date());
     } catch {
       console.error("Failed to fetch leads");
@@ -80,6 +84,20 @@ export function Dashboard() {
               </div>
             </div>
             <div className="flex items-center gap-3">
+              <span
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                  dataSource === "live"
+                    ? "bg-green-100 text-green-700"
+                    : "bg-amber-100 text-amber-700"
+                }`}
+              >
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    dataSource === "live" ? "bg-green-500" : "bg-amber-500"
+                  }`}
+                />
+                {dataSource === "live" ? "Live Data" : "Sample Data"}
+              </span>
               <span className="text-[10px] text-gray-400">
                 Last refreshed:{" "}
                 {lastRefreshed.toLocaleTimeString("en-US", {
@@ -88,7 +106,7 @@ export function Dashboard() {
                 })}
               </span>
               <button
-                onClick={fetchLeads}
+                onClick={() => fetchLeads(true)}
                 disabled={loading}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors disabled:opacity-50"
               >

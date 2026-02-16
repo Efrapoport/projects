@@ -20,9 +20,9 @@ export function applyFilters(leads: Lead[], filters: Filters): Lead[] {
     );
     if (!hasRecentSignal) return false;
 
-    // Company size filter
+    // Company size filter (skip for companies with unknown size)
     const size = lead.company.employeeCount;
-    if (size < filters.companySizeMin || size > filters.companySizeMax) {
+    if (size > 0 && (size < filters.companySizeMin || size > filters.companySizeMax)) {
       return false;
     }
 
