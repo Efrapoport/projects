@@ -41,6 +41,7 @@ export function Dashboard() {
     if (refresh) params.set("refresh", "true");
 
     try {
+      params.set("_t", String(Date.now()));
       const res = await fetch(`/api/leads?${params.toString()}`);
       const data: ApiResponse = await res.json();
       setLeads(data.leads);

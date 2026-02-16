@@ -40,11 +40,19 @@ export async function GET(request: NextRequest) {
 
   const filtered = applyFilters(allLeads, filters);
 
-  return NextResponse.json({
-    leads: filtered,
-    total: allLeads.length,
-    filtered: filtered.length,
-    industries: availableIndustries,
-    dataSource,
-  });
+  return NextResponse.json(
+    {
+      leads: filtered,
+      total: allLeads.length,
+      filtered: filtered.length,
+      industries: availableIndustries,
+      dataSource,
+    },
+    {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        Pragma: "no-cache",
+      },
+    }
+  );
 }
