@@ -43,6 +43,10 @@ export function Dashboard() {
     try {
       params.set("_t", String(Date.now()));
       const res = await fetch(`/api/leads?${params.toString()}`);
+      if (!res.ok) {
+        console.error(`Failed to fetch leads: HTTP ${res.status}`);
+        return;
+      }
       const data: ApiResponse = await res.json();
       setLeads(data.leads);
       setTotalLeads(data.total);
@@ -50,8 +54,8 @@ export function Dashboard() {
       setIndustries(data.industries);
       setDataSource(data.dataSource || "demo");
       setLastRefreshed(new Date());
-    } catch {
-      console.error("Failed to fetch leads");
+    } catch (err) {
+      console.error("Failed to fetch leads:", err);
     } finally {
       setLoading(false);
     }
