@@ -13,7 +13,7 @@ interface ApiResponse {
   total: number;
   filtered: number;
   industries: string[];
-  dataSource: "live" | "no_results";
+  dataSource?: "live" | "demo";
 }
 
 export function Dashboard() {
@@ -25,7 +25,7 @@ export function Dashboard() {
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
-  const [dataSource, setDataSource] = useState<"live" | "no_results">("no_results");
+  const [dataSource, setDataSource] = useState<"live" | "demo">("demo");
 
   const fetchLeads = useCallback(async (refresh = false) => {
     setLoading(true);
@@ -42,23 +42,16 @@ export function Dashboard() {
 
     try {
       params.set("_t", String(Date.now()));
-      const url = `/api/leads?${params.toString()}`;
-      console.log(`[Dashboard] Fetching: ${url}`);
-      const res = await fetch(url);
-      console.log(`[Dashboard] Response status: ${res.status}, headers:`, Object.fromEntries(res.headers.entries()));
+      const res = await fetch(`/api/leads?${params.toString()}`);
       const data: ApiResponse = await res.json();
-      console.log(`[Dashboard] API returned: total=${data.total}, filtered=${data.filtered}, dataSource=${data.dataSource}, leads=${data.leads?.length}`);
-      if (data.leads?.length > 0) {
-        console.log(`[Dashboard] Lead companies:`, data.leads.map((l: Lead) => l.company.name));
-      }
       setLeads(data.leads);
       setTotalLeads(data.total);
       setFilteredCount(data.filtered);
       setIndustries(data.industries);
-      setDataSource(data.dataSource);
+      setDataSource(data.dataSource || "demo");
       setLastRefreshed(new Date());
-    } catch (err) {
-      console.error("[Dashboard] Failed to fetch leads:", err);
+    } catch {
+      console.error("Failed to fetch leads");
     } finally {
       setLoading(false);
     }
@@ -74,11 +67,6 @@ export function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* DEBUG BANNER — remove after debugging */}
-      <div className="bg-red-600 text-white px-4 py-2 text-xs font-mono">
-        DEBUG: leads={leads.length} | total={totalLeads} | dataSource={dataSource} | loading={String(loading)}
-        {leads.length > 0 && ` | companies: ${leads.map(l => l.company.name).join(", ")}`}
-      </div>
       {/* Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-30">
         <div className="max-w-[1600px] mx-auto px-4 py-3">
@@ -101,15 +89,15 @@ export function Dashboard() {
                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
                   dataSource === "live"
                     ? "bg-green-100 text-green-700"
-                    : "bg-amber-100 text-amber-700"
+                    : "bg-blue-100 text-blue-700"
                 }`}
               >
                 <span
                   className={`w-1.5 h-1.5 rounded-full ${
-                    dataSource === "live" ? "bg-green-500" : "bg-amber-500"
+                    dataSource === "live" ? "bg-green-500" : "bg-blue-500"
                   }`}
                 />
-                {dataSource === "live" ? "Live Data" : "No Results"}
+                {dataSource === "live" ? "Live Data" : "Demo Data"}
               </span>
               <span className="text-[10px] text-gray-400">
                 Last refreshed:{" "}
