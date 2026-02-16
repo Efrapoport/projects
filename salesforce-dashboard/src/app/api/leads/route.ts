@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAllLeads, getAvailableIndustries } from "@/lib/mock-data";
 import { scrapeJobs } from "@/lib/scraper";
 import { buildLeadsFromJobs, getIndustriesFromLeads } from "@/lib/lead-builder";
 import { applyFilters } from "@/lib/filters";
@@ -28,28 +27,16 @@ export async function GET(request: NextRequest) {
     sources,
   };
 
-  // Try scraping real data first, fall back to mock data
-  let allLeads;
-  let availableIndustries;
-  let dataSource: "live" | "mock";
+  // Scrape real data from multiple job board APIs
+  const scrapedJobs = await scrapeJobs(forceRefresh);
+  const allLeads = buildLeadsFromJobs(scrapedJobs);
+  const availableIndustries = getIndustriesFromLeads(allLeads);
 
-  try {
-    const scrapedJobs = await scrapeJobs(forceRefresh);
+  const dataSource = scrapedJobs.length > 0 ? "live" : "no_results";
 
-    if (scrapedJobs.length > 0) {
-      allLeads = buildLeadsFromJobs(scrapedJobs);
-      availableIndustries = getIndustriesFromLeads(allLeads);
-      dataSource = "live";
-      console.log(`[api/leads] Serving ${allLeads.length} live leads from ${scrapedJobs.length} scraped jobs`);
-    } else {
-      throw new Error("No scraped jobs found");
-    }
-  } catch (error) {
-    console.log("[api/leads] Scraping failed or returned no results, falling back to mock data:", error);
-    allLeads = getAllLeads();
-    availableIndustries = getAvailableIndustries();
-    dataSource = "mock";
-  }
+  console.log(
+    `[api/leads] Serving ${allLeads.length} leads from ${scrapedJobs.length} scraped jobs (source: ${dataSource})`
+  );
 
   const filtered = applyFilters(allLeads, filters);
 

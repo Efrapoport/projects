@@ -3,6 +3,10 @@
 export type SignalSource =
   | "linkedin"
   | "indeed"
+  | "remoteok"
+  | "arbeitnow"
+  | "jobicy"
+  | "himalayas"
   | "greenhouse"
   | "lever"
   | "builtwith"

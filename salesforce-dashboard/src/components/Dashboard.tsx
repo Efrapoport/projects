@@ -13,7 +13,7 @@ interface ApiResponse {
   total: number;
   filtered: number;
   industries: string[];
-  dataSource: "live" | "mock";
+  dataSource: "live" | "no_results";
 }
 
 export function Dashboard() {
@@ -25,7 +25,7 @@ export function Dashboard() {
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
-  const [dataSource, setDataSource] = useState<"live" | "mock">("mock");
+  const [dataSource, setDataSource] = useState<"live" | "no_results">("no_results");
 
   const fetchLeads = useCallback(async (refresh = false) => {
     setLoading(true);
@@ -96,7 +96,7 @@ export function Dashboard() {
                     dataSource === "live" ? "bg-green-500" : "bg-amber-500"
                   }`}
                 />
-                {dataSource === "live" ? "Live Data" : "Sample Data"}
+                {dataSource === "live" ? "Live Data" : "No Results"}
               </span>
               <span className="text-[10px] text-gray-400">
                 Last refreshed:{" "}

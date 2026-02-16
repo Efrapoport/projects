@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
-import { getAllLeads } from "@/lib/mock-data";
+import { scrapeJobs } from "@/lib/scraper";
+import { buildLeadsFromJobs } from "@/lib/lead-builder";
 import { generateDigestHtml } from "@/lib/email-digest";
 
 export async function GET() {
-  const leads = getAllLeads();
+  const jobs = await scrapeJobs();
+  const leads = buildLeadsFromJobs(jobs);
   const html = generateDigestHtml(leads, new Date());
 
   return new NextResponse(html, {

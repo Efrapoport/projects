@@ -1,4 +1,5 @@
 import * as cheerio from "cheerio";
+import { SignalSource } from "./types";
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -8,18 +9,9 @@ export interface ScrapedJob {
   location: string;
   description: string;
   url: string;
-  source: "indeed";
+  source: SignalSource;
   detectedAt: string;
 }
-
-// ── Search Queries ──────────────────────────────────────────────────
-
-const SEARCH_QUERIES = [
-  "salesforce administrator",
-  "first salesforce admin",
-  "salesforce developer greenfield",
-  "salesforce implementation specialist",
-];
 
 // ── In-Memory Cache ─────────────────────────────────────────────────
 
@@ -27,54 +19,249 @@ let cachedJobs: ScrapedJob[] | null = null;
 let cacheTimestamp = 0;
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
 
-// ── Indeed Scraper ──────────────────────────────────────────────────
+// ── Shared fetch helper ─────────────────────────────────────────────
 
-async function scrapeIndeedSearch(query: string): Promise<ScrapedJob[]> {
-  const url = `https://www.indeed.com/jobs?q=${encodeURIComponent(query)}&sort=date&limit=25`;
-
+async function fetchJSON(url: string, timeoutMs = 15000): Promise<unknown> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
+        Accept: "application/json",
         "User-Agent":
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Cache-Control": "no-cache",
-        Pragma: "no-cache",
       },
     });
 
     if (!response.ok) {
-      console.warn(`Indeed returned ${response.status} for query: ${query}`);
-      return [];
+      throw new Error(`HTTP ${response.status} from ${url}`);
     }
 
-    const html = await response.text();
-    return parseIndeedHTML(html);
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      console.warn(`Indeed request timed out for query: ${query}`);
-    } else {
-      console.warn(`Indeed scrape failed for query "${query}":`, error);
-    }
-    return [];
+    return await response.json();
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// ── Source 1: RemoteOK ──────────────────────────────────────────────
+// Free JSON API, no auth required
+// GET https://remoteok.com/api?tag=salesforce
+// Returns: JSON array, element[0] is legal notice, rest are job objects
+
+async function fetchRemoteOK(): Promise<ScrapedJob[]> {
+  const jobs: ScrapedJob[] = [];
+
+  try {
+    const data = await fetchJSON(
+      "https://remoteok.com/api?tag=salesforce&api=1"
+    );
+
+    if (!Array.isArray(data)) return [];
+
+    // First element is a legal/metadata object, skip it
+    for (let i = 1; i < data.length; i++) {
+      const item = data[i] as Record<string, unknown>;
+      const company = String(item.company || "").trim();
+      const title = String(item.position || "").trim();
+
+      if (!company || !title) continue;
+
+      jobs.push({
+        title,
+        company,
+        location: String(item.location || "Remote"),
+        description: stripHTML(String(item.description || "")),
+        url: String(item.url || `https://remoteok.com/remote-jobs/${item.id || ""}`),
+        source: "remoteok",
+        detectedAt: item.date
+          ? String(item.date)
+          : new Date((item.epoch as number) * 1000 || Date.now()).toISOString(),
+      });
+    }
+
+    console.log(`[scraper:remoteok] Found ${jobs.length} jobs`);
+  } catch (error) {
+    console.warn("[scraper:remoteok] Failed:", error);
+  }
+
+  return jobs;
+}
+
+// ── Source 2: Arbeitnow ─────────────────────────────────────────────
+// Free JSON API, no auth required
+// GET https://www.arbeitnow.com/api/job-board-api?search=salesforce
+// Returns: { data: [{slug, company_name, title, description, tags, location, remote, url, created_at}], ... }
+
+async function fetchArbeitnow(): Promise<ScrapedJob[]> {
+  const jobs: ScrapedJob[] = [];
+
+  try {
+    const data = (await fetchJSON(
+      "https://www.arbeitnow.com/api/job-board-api?search=salesforce"
+    )) as Record<string, unknown>;
+
+    const items = (data?.data || []) as Record<string, unknown>[];
+
+    for (const item of items) {
+      const company = String(item.company_name || "").trim();
+      const title = String(item.title || "").trim();
+
+      if (!company || !title) continue;
+
+      jobs.push({
+        title,
+        company,
+        location: String(item.location || (item.remote ? "Remote" : "")),
+        description: stripHTML(String(item.description || "")),
+        url: item.url
+          ? String(item.url)
+          : `https://www.arbeitnow.com/${item.slug || ""}`,
+        source: "arbeitnow",
+        detectedAt: String(item.created_at || new Date().toISOString()),
+      });
+    }
+
+    console.log(`[scraper:arbeitnow] Found ${jobs.length} jobs`);
+  } catch (error) {
+    console.warn("[scraper:arbeitnow] Failed:", error);
+  }
+
+  return jobs;
+}
+
+// ── Source 3: Jobicy ────────────────────────────────────────────────
+// Free JSON API, no auth required
+// GET https://jobicy.com/api/v2/remote-jobs?tag=salesforce&count=50
+// Returns: { jobs: [{id, url, jobTitle, companyName, companyLogo, jobIndustry, jobType, jobGeo, jobLevel, jobExcerpt, pubDate}] }
+
+async function fetchJobicy(): Promise<ScrapedJob[]> {
+  const jobs: ScrapedJob[] = [];
+
+  try {
+    const data = (await fetchJSON(
+      "https://jobicy.com/api/v2/remote-jobs?tag=salesforce&count=50"
+    )) as Record<string, unknown>;
+
+    const items = (data?.jobs || []) as Record<string, unknown>[];
+
+    for (const item of items) {
+      const company = String(item.companyName || "").trim();
+      const title = String(item.jobTitle || "").trim();
+
+      if (!company || !title) continue;
+
+      jobs.push({
+        title,
+        company,
+        location: String(item.jobGeo || "Remote"),
+        description: stripHTML(String(item.jobExcerpt || "")),
+        url: String(item.url || ""),
+        source: "jobicy",
+        detectedAt: String(item.pubDate || new Date().toISOString()),
+      });
+    }
+
+    console.log(`[scraper:jobicy] Found ${jobs.length} jobs`);
+  } catch (error) {
+    console.warn("[scraper:jobicy] Failed:", error);
+  }
+
+  return jobs;
+}
+
+// ── Source 4: Himalayas ─────────────────────────────────────────────
+// Free JSON API, no auth required
+// GET https://himalayas.app/jobs/api?q=salesforce&limit=50
+// Returns: { jobs: [{id, title, companyName, categories, url, pubDate, ...}] }
+
+async function fetchHimalayas(): Promise<ScrapedJob[]> {
+  const jobs: ScrapedJob[] = [];
+
+  try {
+    const data = (await fetchJSON(
+      "https://himalayas.app/jobs/api?q=salesforce&limit=50"
+    )) as Record<string, unknown>;
+
+    const items = (data?.jobs || []) as Record<string, unknown>[];
+
+    for (const item of items) {
+      const company = String(item.companyName || "").trim();
+      const title = String(item.title || "").trim();
+
+      if (!company || !title) continue;
+
+      jobs.push({
+        title,
+        company,
+        location: String(item.location || "Remote"),
+        description: stripHTML(String(item.excerpt || item.description || "")),
+        url: String(item.url || item.applicationLink || ""),
+        source: "himalayas",
+        detectedAt: String(item.pubDate || new Date().toISOString()),
+      });
+    }
+
+    console.log(`[scraper:himalayas] Found ${jobs.length} jobs`);
+  } catch (error) {
+    console.warn("[scraper:himalayas] Failed:", error);
+  }
+
+  return jobs;
+}
+
+// ── Source 5: Indeed (HTML scraping, kept as fallback) ───────────────
+
+async function fetchIndeed(): Promise<ScrapedJob[]> {
+  const allJobs: ScrapedJob[] = [];
+  const queries = ["salesforce administrator", "first salesforce admin"];
+
+  for (const query of queries) {
+    try {
+      const url = `https://www.indeed.com/jobs?q=${encodeURIComponent(query)}&sort=date&limit=25`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            Accept:
+              "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Cache-Control": "no-cache",
+          },
+        });
+
+        if (response.ok) {
+          const html = await response.text();
+          allJobs.push(...parseIndeedHTML(html));
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      // Rate limit between Indeed queries
+      if (queries.indexOf(query) < queries.length - 1) {
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    } catch (error) {
+      console.warn(`[scraper:indeed] Query "${query}" failed:`, error);
+    }
+  }
+
+  console.log(`[scraper:indeed] Found ${allJobs.length} jobs`);
+  return allJobs;
 }
 
 function parseIndeedHTML(html: string): ScrapedJob[] {
   const $ = cheerio.load(html);
   const jobs: ScrapedJob[] = [];
 
-  // Strategy 1: Extract from embedded mosaic JSON data
-  // Indeed embeds job card data in script tags as window.mosaic.providerData
+  // Strategy 1: Embedded mosaic JSON data
   $("script").each((_, el) => {
     const content = $(el).html() || "";
     if (
@@ -82,7 +269,6 @@ function parseIndeedHTML(html: string): ScrapedJob[] {
       content.includes("jobcards")
     ) {
       try {
-        // Look for the mosaic provider data pattern
         const patterns = [
           /window\.mosaic\.providerData\["mosaic-provider-jobcards"\]\s*=\s*({[\s\S]+?});\s*$/m,
           /mosaic-provider-jobcards["\s]*[=:]\s*({[\s\S]+?});\s*$/m,
@@ -118,7 +304,7 @@ function parseIndeedHTML(html: string): ScrapedJob[] {
                 });
               }
             }
-            if (jobs.length > 0) return false; // break .each()
+            if (jobs.length > 0) return false;
           }
         }
       } catch {
@@ -129,7 +315,7 @@ function parseIndeedHTML(html: string): ScrapedJob[] {
 
   if (jobs.length > 0) return jobs;
 
-  // Strategy 2: Parse HTML job card elements
+  // Strategy 2: HTML job card elements
   const cardSelectors = [
     "[data-jk]",
     ".job_seen_beacon",
@@ -141,7 +327,10 @@ function parseIndeedHTML(html: string): ScrapedJob[] {
   for (const selector of cardSelectors) {
     $(selector).each((_, el) => {
       const $el = $(el);
-      const jobKey = $el.attr("data-jk") || $el.closest("[data-jk]").attr("data-jk") || "";
+      const jobKey =
+        $el.attr("data-jk") ||
+        $el.closest("[data-jk]").attr("data-jk") ||
+        "";
 
       const title =
         $el.find(".jobTitle span").first().text().trim() ||
@@ -192,18 +381,16 @@ function parseIndeedHTML(html: string): ScrapedJob[] {
       const items = Array.isArray(data) ? data : [data];
 
       for (const item of items) {
-        // Handle ItemList with JobPosting elements
         if (item["@type"] === "ItemList" && item.itemListElement) {
           for (const entry of item.itemListElement) {
             const posting = entry.item || entry;
             if (posting["@type"] === "JobPosting") {
-              pushJobPosting($, jobs, posting);
+              pushJobPosting(jobs, posting);
             }
           }
         }
-        // Handle direct JobPosting
         if (item["@type"] === "JobPosting") {
-          pushJobPosting($, jobs, item);
+          pushJobPosting(jobs, item);
         }
       }
     } catch {
@@ -215,11 +402,12 @@ function parseIndeedHTML(html: string): ScrapedJob[] {
 }
 
 function pushJobPosting(
-  $: cheerio.CheerioAPI,
   jobs: ScrapedJob[],
   posting: Record<string, unknown>
 ): void {
-  const org = posting.hiringOrganization as Record<string, unknown> | undefined;
+  const org = posting.hiringOrganization as
+    | Record<string, unknown>
+    | undefined;
   const loc = posting.jobLocation as Record<string, unknown> | undefined;
   const addr = loc?.address as Record<string, unknown> | undefined;
 
@@ -253,28 +441,33 @@ export async function scrapeJobs(
     cachedJobs &&
     Date.now() - cacheTimestamp < CACHE_TTL
   ) {
+    console.log("[scraper] Returning cached results");
     return cachedJobs;
   }
 
-  console.log("[scraper] Starting job scrape...");
+  console.log("[scraper] Starting multi-source job scrape...");
+
+  // Run ALL sources in parallel for speed
+  const results = await Promise.allSettled([
+    fetchRemoteOK(),
+    fetchArbeitnow(),
+    fetchJobicy(),
+    fetchHimalayas(),
+    fetchIndeed(),
+  ]);
+
+  const sourceNames = ["RemoteOK", "Arbeitnow", "Jobicy", "Himalayas", "Indeed"];
   const allJobs: ScrapedJob[] = [];
+  const sourceCounts: Record<string, number> = {};
 
-  for (const query of SEARCH_QUERIES) {
-    try {
-      const jobs = await scrapeIndeedSearch(query);
-      console.log(
-        `[scraper] Query "${query}" returned ${jobs.length} results`
-      );
-      allJobs.push(...jobs);
-
-      // Rate limit: wait between requests to avoid being blocked
-      if (SEARCH_QUERIES.indexOf(query) < SEARCH_QUERIES.length - 1) {
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-    } catch (error) {
-      console.warn(`[scraper] Query "${query}" failed:`, error);
+  results.forEach((result, i) => {
+    if (result.status === "fulfilled" && result.value.length > 0) {
+      allJobs.push(...result.value);
+      sourceCounts[sourceNames[i]] = result.value.length;
+    } else if (result.status === "rejected") {
+      console.warn(`[scraper] ${sourceNames[i]} rejected:`, result.reason);
     }
-  }
+  });
 
   // Deduplicate by company + title (case-insensitive)
   const seen = new Set<string>();
@@ -286,7 +479,7 @@ export async function scrapeJobs(
   });
 
   console.log(
-    `[scraper] Total: ${allJobs.length} jobs, ${unique.length} unique`
+    `[scraper] Results: ${JSON.stringify(sourceCounts)} → ${allJobs.length} total, ${unique.length} unique`
   );
 
   // Cache results
