@@ -34,6 +34,11 @@ const sourceIcons: Record<SignalSource, React.ReactNode> = {
   appexchange: <Globe className="w-3.5 h-3.5 text-blue-500" />,
   dns: <Wifi className="w-3.5 h-3.5 text-gray-600" />,
   news: <Newspaper className="w-3.5 h-3.5 text-gray-500" />,
+  wellfound: <Globe className="w-3.5 h-3.5 text-pink-500" />,
+  "startup.jobs": <Search className="w-3.5 h-3.5 text-lime-600" />,
+  ziprecruiter: <Search className="w-3.5 h-3.5 text-sky-600" />,
+  glassdoor: <Globe className="w-3.5 h-3.5 text-green-500" />,
+  builtin: <Globe className="w-3.5 h-3.5 text-indigo-500" />,
 };
 
 function ScoreBadge({ score }: { score: number }) {
@@ -158,7 +163,9 @@ export function LeadTable({
                 </td>
                 <td className="px-4 py-3">
                   <span className="text-xs text-gray-500">
-                    {lead.company.employeeCount}
+                    {lead.company.employeeCount > 0
+                      ? lead.company.employeeCount
+                      : "—"}
                   </span>
                 </td>
                 <td className="px-4 py-3">

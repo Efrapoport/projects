@@ -145,9 +145,9 @@ export function FilterBar({
         <button
           onClick={() =>
             onChange({
-              timeframe: "7d",
-              companySizeMin: 50,
-              companySizeMax: 500,
+              timeframe: "30d",
+              companySizeMin: 0,
+              companySizeMax: 10000,
               industries: [],
               minScore: 0,
               sources: [],

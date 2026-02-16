@@ -15,7 +15,12 @@ export type SignalSource =
   | "apollo"
   | "appexchange"
   | "dns"
-  | "news";
+  | "news"
+  | "wellfound"
+  | "startup.jobs"
+  | "ziprecruiter"
+  | "glassdoor"
+  | "builtin";
 
 export type SignalCategory =
   | "technographic"
@@ -85,9 +90,9 @@ export interface Filters {
 }
 
 export const DEFAULT_FILTERS: Filters = {
-  timeframe: "7d",
-  companySizeMin: 50,
-  companySizeMax: 500,
+  timeframe: "30d",
+  companySizeMin: 0,
+  companySizeMax: 10000,
   industries: [],
   minScore: 0,
   sources: [],

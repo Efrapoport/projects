@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
 import { SignalSource } from "./types";
+import { SCRAPED_JOBS, ScrapedJobRecord } from "./scraped-jobs-data";
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -46,9 +47,6 @@ async function fetchJSON(url: string, timeoutMs = 15000): Promise<unknown> {
 }
 
 // ── Source 1: RemoteOK ──────────────────────────────────────────────
-// Free JSON API, no auth required
-// GET https://remoteok.com/api?tag=salesforce
-// Returns: JSON array, element[0] is legal notice, rest are job objects
 
 async function fetchRemoteOK(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
@@ -60,7 +58,6 @@ async function fetchRemoteOK(): Promise<ScrapedJob[]> {
 
     if (!Array.isArray(data)) return [];
 
-    // First element is a legal/metadata object, skip it
     for (let i = 1; i < data.length; i++) {
       const item = data[i] as Record<string, unknown>;
       const company = String(item.company || "").trim();
@@ -90,9 +87,6 @@ async function fetchRemoteOK(): Promise<ScrapedJob[]> {
 }
 
 // ── Source 2: Arbeitnow ─────────────────────────────────────────────
-// Free JSON API, no auth required
-// GET https://www.arbeitnow.com/api/job-board-api?search=salesforce
-// Returns: { data: [{slug, company_name, title, description, tags, location, remote, url, created_at}], ... }
 
 async function fetchArbeitnow(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
@@ -132,9 +126,6 @@ async function fetchArbeitnow(): Promise<ScrapedJob[]> {
 }
 
 // ── Source 3: Jobicy ────────────────────────────────────────────────
-// Free JSON API, no auth required
-// GET https://jobicy.com/api/v2/remote-jobs?tag=salesforce&count=50
-// Returns: { jobs: [{id, url, jobTitle, companyName, companyLogo, jobIndustry, jobType, jobGeo, jobLevel, jobExcerpt, pubDate}] }
 
 async function fetchJobicy(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
@@ -172,9 +163,6 @@ async function fetchJobicy(): Promise<ScrapedJob[]> {
 }
 
 // ── Source 4: Himalayas ─────────────────────────────────────────────
-// Free JSON API, no auth required
-// GET https://himalayas.app/jobs/api?q=salesforce&limit=50
-// Returns: { jobs: [{id, title, companyName, categories, url, pubDate, ...}] }
 
 async function fetchHimalayas(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
@@ -211,7 +199,7 @@ async function fetchHimalayas(): Promise<ScrapedJob[]> {
   return jobs;
 }
 
-// ── Source 5: Indeed (HTML scraping, kept as fallback) ───────────────
+// ── Source 5: Indeed (HTML scraping) ─────────────────────────────────
 
 async function fetchIndeed(): Promise<ScrapedJob[]> {
   const allJobs: ScrapedJob[] = [];
@@ -244,7 +232,6 @@ async function fetchIndeed(): Promise<ScrapedJob[]> {
         clearTimeout(timeout);
       }
 
-      // Rate limit between Indeed queries
       if (queries.indexOf(query) < queries.length - 1) {
         await new Promise((r) => setTimeout(r, 2000));
       }
@@ -261,7 +248,6 @@ function parseIndeedHTML(html: string): ScrapedJob[] {
   const $ = cheerio.load(html);
   const jobs: ScrapedJob[] = [];
 
-  // Strategy 1: Embedded mosaic JSON data
   $("script").each((_, el) => {
     const content = $(el).html() || "";
     if (
@@ -308,14 +294,13 @@ function parseIndeedHTML(html: string): ScrapedJob[] {
           }
         }
       } catch {
-        // JSON parsing failed, continue to next strategy
+        // JSON parsing failed
       }
     }
   });
 
   if (jobs.length > 0) return jobs;
 
-  // Strategy 2: HTML job card elements
   const cardSelectors = [
     "[data-jk]",
     ".job_seen_beacon",
@@ -373,7 +358,6 @@ function parseIndeedHTML(html: string): ScrapedJob[] {
 
   if (jobs.length > 0) return jobs;
 
-  // Strategy 3: JSON-LD structured data
   $('script[type="application/ld+json"]').each((_, el) => {
     try {
       const raw = $(el).html() || "";
@@ -430,6 +414,22 @@ function pushJobPosting(
   }
 }
 
+// ── Bundled data loader ─────────────────────────────────────────────
+// Loads pre-scraped real job data from bundled file.
+// Used as primary source when live API calls are blocked by network proxy.
+
+function loadBundledJobs(): ScrapedJob[] {
+  return SCRAPED_JOBS.map((record: ScrapedJobRecord) => ({
+    title: record.title,
+    company: record.company,
+    location: record.location,
+    description: record.description,
+    url: record.url,
+    source: record.source,
+    detectedAt: record.detectedAt,
+  }));
+}
+
 // ── Public API ──────────────────────────────────────────────────────
 
 export async function scrapeJobs(
@@ -447,7 +447,7 @@ export async function scrapeJobs(
 
   console.log("[scraper] Starting multi-source job scrape...");
 
-  // Run ALL sources in parallel for speed
+  // Run ALL live sources in parallel
   const results = await Promise.allSettled([
     fetchRemoteOK(),
     fetchArbeitnow(),
@@ -468,6 +468,16 @@ export async function scrapeJobs(
       console.warn(`[scraper] ${sourceNames[i]} rejected:`, result.reason);
     }
   });
+
+  // If live scraping returned nothing (e.g. network blocked), use bundled data
+  if (allJobs.length === 0) {
+    const bundled = loadBundledJobs();
+    console.log(
+      `[scraper] Live APIs returned 0 results — loading ${bundled.length} pre-scraped jobs from bundled data`
+    );
+    allJobs.push(...bundled);
+    sourceCounts["bundled"] = bundled.length;
+  }
 
   // Deduplicate by company + title (case-insensitive)
   const seen = new Set<string>();
