@@ -16,19 +16,39 @@ interface ApiResponse {
   dataSource?: "live" | "demo";
 }
 
-export function Dashboard() {
+interface DashboardProps {
+  initialData: ApiResponse;
+}
+
+async function fetchWithRetry(url: string, retries = 3): Promise<Response> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) return res;
+      console.warn(`[Dashboard] fetch attempt ${i + 1} got HTTP ${res.status}`);
+    } catch (err) {
+      console.warn(`[Dashboard] fetch attempt ${i + 1} failed:`, err);
+    }
+    if (i < retries - 1) await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
+  }
+  throw new Error("Failed after retries");
+}
+
+export function Dashboard({ initialData }: DashboardProps) {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [industries, setIndustries] = useState<string[]>([]);
-  const [totalLeads, setTotalLeads] = useState(0);
-  const [filteredCount, setFilteredCount] = useState(0);
+  const [leads, setLeads] = useState<Lead[]>(initialData.leads);
+  const [industries, setIndustries] = useState<string[]>(initialData.industries);
+  const [totalLeads, setTotalLeads] = useState(initialData.total);
+  const [filteredCount, setFilteredCount] = useState(initialData.filtered);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
-  const [dataSource, setDataSource] = useState<"live" | "demo">("demo");
+  const [dataSource, setDataSource] = useState<"live" | "demo">(initialData.dataSource || "demo");
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const fetchLeads = useCallback(async (refresh = false) => {
     setLoading(true);
+    setFetchError(null);
     const params = new URLSearchParams();
     params.set("timeframe", filters.timeframe);
     params.set("companySizeMin", String(filters.companySizeMin));
@@ -39,14 +59,10 @@ export function Dashboard() {
     if (filters.sources.length)
       params.set("sources", filters.sources.join(","));
     if (refresh) params.set("refresh", "true");
+    params.set("_t", String(Date.now()));
 
     try {
-      params.set("_t", String(Date.now()));
-      const res = await fetch(`/api/leads?${params.toString()}`);
-      if (!res.ok) {
-        console.error(`Failed to fetch leads: HTTP ${res.status}`);
-        return;
-      }
+      const res = await fetchWithRetry(`/api/leads?${params.toString()}`);
       const data: ApiResponse = await res.json();
       setLeads(data.leads);
       setTotalLeads(data.total);
@@ -54,16 +70,24 @@ export function Dashboard() {
       setIndustries(data.industries);
       setDataSource(data.dataSource || "demo");
       setLastRefreshed(new Date());
-    } catch (err) {
-      console.error("Failed to fetch leads:", err);
+    } catch {
+      setFetchError("Could not refresh leads. Showing cached data.");
     } finally {
       setLoading(false);
     }
   }, [filters]);
 
+  // Only fetch client-side when filters change (skip initial mount since we have server data)
+  const filtersKey = JSON.stringify(filters);
+  const isInitialMount = useState(true);
   useEffect(() => {
+    if (isInitialMount[0]) {
+      isInitialMount[0] = false;
+      return;
+    }
     fetchLeads();
-  }, [fetchLeads]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtersKey]);
 
   const selectedLead = selectedLeadId
     ? leads.find((l) => l.id === selectedLeadId) || null
@@ -137,6 +161,19 @@ export function Dashboard() {
       {/* Main Content */}
       <main className="max-w-[1600px] mx-auto px-4 py-4">
         <div className="space-y-4">
+          {/* Error Banner */}
+          {fetchError && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 flex items-center justify-between">
+              <span className="text-sm text-amber-700">{fetchError}</span>
+              <button
+                onClick={() => fetchLeads(true)}
+                className="text-xs font-medium text-amber-700 hover:text-amber-900 underline"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
           {/* Stats */}
           <StatsBar leads={leads} />
 
