@@ -1,6 +1,0 @@
-{
-  "buildCommand": "cd salesforce-dashboard && npm install && npm run build",
-  "outputDirectory": "salesforce-dashboard/.next",
-  "framework": "nextjs",
-  "installCommand": "cd salesforce-dashboard && npm install"
-}
