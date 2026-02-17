@@ -23,7 +23,7 @@ export function generateDigestHtml(leads: Lead[], date: Date): string {
       <td style="padding: 12px 16px; border-bottom: 1px solid #f0f0f0;">
         <div style="font-weight: 600; color: #111827; font-size: 14px;">${lead.company.name}</div>
         <div style="color: #6b7280; font-size: 12px; margin-top: 2px;">
-          ${lead.company.industry} &middot; ${lead.company.employeeCount} employees &middot; ${lead.company.city}, ${lead.company.state}
+          ${lead.company.industry}${lead.company.employeeCount > 0 ? ` &middot; ${lead.company.employeeCount.toLocaleString()} employees` : ""} &middot; ${lead.company.city}, ${lead.company.state}
         </div>
       </td>
       <td style="padding: 12px 16px; border-bottom: 1px solid #f0f0f0; text-align: center;">

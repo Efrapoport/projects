@@ -160,8 +160,9 @@ export function SignalPanel({ lead, onClose }: SignalPanelProps) {
           <div>
             <h2 className="text-lg font-bold">{lead.company.name}</h2>
             <p className="text-blue-100 text-xs mt-0.5">
-              {lead.company.industry} &middot; {lead.company.employeeCount}{" "}
-              employees &middot; {lead.company.city}, {lead.company.state}
+              {lead.company.industry}
+              {lead.company.employeeCount > 0 && <> &middot; {lead.company.employeeCount.toLocaleString()} employees</>}
+              {(lead.company.city || lead.company.state) && <> &middot; {lead.company.city}{lead.company.city && lead.company.state && ", "}{lead.company.state}</>}
             </p>
           </div>
           <button

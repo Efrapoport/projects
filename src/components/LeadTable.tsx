@@ -177,7 +177,7 @@ export function LeadTable({
                 <td className="px-4 py-3">
                   <span className="text-xs text-gray-500">
                     {lead.company.employeeCount > 0
-                      ? lead.company.employeeCount
+                      ? lead.company.employeeCount.toLocaleString()
                       : "—"}
                   </span>
                 </td>

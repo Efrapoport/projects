@@ -1,7 +1,7 @@
 import { Lead, Signal, Company, Contact } from "./types";
 import { computeLeadScore, generateTriggerEvent } from "./scoring";
 import { ScrapedJob } from "./scraper";
-import { batchValidateCompanyUrls, safeLinkedInUrl, safeCompanySearchUrl } from "./data-integrity";
+import { batchValidateCompanyUrls, batchEnrichEmployeeCounts, safeLinkedInUrl, safeCompanySearchUrl } from "./data-integrity";
 import { createLogger } from "./logger";
 
 const log = createLogger("lead-builder");
@@ -25,14 +25,25 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
     companyEntries.push({ name, slug: slugify(name) });
   }
 
-  // Validate all company URLs in parallel (with 8s timeout)
-  let validationResults: Map<string, { website: string; websiteVerified: boolean; linkedinUrl: string; domain: string }>;
+  // Validate URLs and enrich employee counts IN PARALLEL
+  let validationResults: Map<string, { website: string; websiteVerified: boolean; linkedinUrl: string; domain: string; employeeCount: number }>;
+  let employeeCounts: Map<string, number>;
+
   try {
-    validationResults = await batchValidateCompanyUrls(companyEntries);
-    log.info("URL validation complete", { companies: validationResults.size });
+    const [urlResults, empResults] = await Promise.all([
+      batchValidateCompanyUrls(companyEntries),
+      batchEnrichEmployeeCounts(companyEntries),
+    ]);
+    validationResults = urlResults;
+    employeeCounts = empResults;
+    log.info("Company enrichment complete", {
+      urlValidated: validationResults.size,
+      employeeEnriched: Array.from(empResults.values()).filter((v) => v > 0).length,
+    });
   } catch (error) {
-    log.warn("URL validation failed — using safe fallbacks", { error: String(error) });
+    log.warn("Company enrichment failed — using safe fallbacks", { error: String(error) });
     validationResults = new Map();
+    employeeCounts = new Map();
   }
 
   // Build one Lead per job posting (each job = its own row)
@@ -58,7 +69,7 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
       linkedinUrl: validation?.linkedinUrl || safeLinkedInUrl(job.company),
       website: validation?.website || safeCompanySearchUrl(job.company),
       industry: inferIndustry([job]),
-      employeeCount: 0, // Unknown — filters will handle this
+      employeeCount: employeeCounts.get(companyKey) || 0,
       city,
       state,
       country: "US",
