@@ -1248,12 +1248,17 @@ export async function scrapeJobs(
     }
   });
 
-  // If live scraping returned nothing (e.g. network blocked), use bundled data
-  if (allJobs.length === 0) {
-    const bundled = loadBundledJobs();
-    log.info(`Live APIs returned 0 — loading bundled data`, { count: bundled.length });
-    allJobs.push(...bundled);
-    sourceCounts["bundled"] = bundled.length;
+  // ALWAYS merge bundled data so we have a solid baseline even when
+  // live APIs return partial results.  Dedup below handles overlaps.
+  const bundled = loadBundledJobs();
+  const liveCount = allJobs.length;
+  allJobs.push(...bundled);
+  sourceCounts["bundled"] = bundled.length;
+
+  if (liveCount === 0) {
+    log.info("Live APIs returned 0 — using bundled data only", { bundled: bundled.length });
+  } else {
+    log.info("Merging live + bundled data", { live: liveCount, bundled: bundled.length });
   }
 
   // Deduplicate by company + title (case-insensitive)
