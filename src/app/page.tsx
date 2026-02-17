@@ -21,10 +21,17 @@ export default async function Home() {
       const allLeads = buildLeadsFromJobs(jobs);
       const industries = getIndustriesFromLeads(allLeads);
       const filtered = applyFilters(allLeads, DEFAULT_FILTERS);
+
+      // Strip signal.raw (full JD) — client only needs the extracted snippets
+      const leadsForClient = filtered.map((lead) => ({
+        ...lead,
+        signals: lead.signals.map(({ raw, ...rest }) => rest),
+      }));
+
       initialData = {
-        leads: filtered,
+        leads: leadsForClient,
         total: allLeads.length,
-        filtered: filtered.length,
+        filtered: leadsForClient.length,
         industries,
         dataSource: "live" as const,
       };

@@ -59,9 +59,15 @@ export async function GET(request: NextRequest) {
 
     const filtered = applyFilters(allLeads, filters);
 
+    // Strip signal.raw (full JD) from response — client only needs the extracted snippets
+    const leadsForClient = filtered.map((lead) => ({
+      ...lead,
+      signals: lead.signals.map(({ raw, ...rest }) => rest),
+    }));
+
     return NextResponse.json(
       {
-        leads: filtered,
+        leads: leadsForClient,
         total: allLeads.length,
         filtered: filtered.length,
         industries: availableIndustries,
