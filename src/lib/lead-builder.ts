@@ -1,10 +1,16 @@
 import { Lead, Signal, Company, Contact } from "./types";
 import { computeLeadScore, generateTriggerEvent } from "./scoring";
 import { ScrapedJob } from "./scraper";
+import { batchValidateCompanyUrls, safeLinkedInUrl, safeCompanySearchUrl } from "./data-integrity";
+import { createLogger } from "./logger";
+
+const log = createLogger("lead-builder");
 
 // ── Transform Scraped Jobs → Leads ──────────────────────────────────
 
-export function buildLeadsFromJobs(jobs: ScrapedJob[]): Lead[] {
+export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
+  const timer = log.time("build-leads");
+
   // Group jobs by company name (normalized)
   const companyGroups = new Map<string, ScrapedJob[]>();
 
@@ -13,6 +19,23 @@ export function buildLeadsFromJobs(jobs: ScrapedJob[]): Lead[] {
     const existing = companyGroups.get(key) || [];
     existing.push(job);
     companyGroups.set(key, existing);
+  }
+
+  // Collect company slugs for batch URL validation
+  const companyEntries: Array<{ name: string; slug: string }> = [];
+  for (const [, companyJobs] of companyGroups) {
+    const name = companyJobs[0].company;
+    companyEntries.push({ name, slug: slugify(name) });
+  }
+
+  // Validate all company URLs in parallel (with 8s timeout)
+  let validationResults: Map<string, { website: string; websiteVerified: boolean; linkedinUrl: string; domain: string }>;
+  try {
+    validationResults = await batchValidateCompanyUrls(companyEntries);
+    log.info("URL validation complete", { companies: validationResults.size });
+  } catch (error) {
+    log.warn("URL validation failed — using safe fallbacks", { error: String(error) });
+    validationResults = new Map();
   }
 
   // Build a Lead for each company
@@ -26,21 +49,32 @@ export function buildLeadsFromJobs(jobs: ScrapedJob[]): Lead[] {
     // Parse location
     const { city, state } = parseLocation(firstJob.location);
 
-    // Build Company
-    const companyId = `scraped-${companyIndex}`;
+    // Get validated URLs (or safe fallbacks)
+    const companyKey = firstJob.company.toLowerCase().trim();
     const slug = slugify(firstJob.company);
+    const validation = validationResults.get(companyKey);
+
+    // Build Company with validated URLs
+    const companyId = `scraped-${companyIndex}`;
     const company: Company = {
       id: companyId,
       name: firstJob.company,
-      domain: `${slug}.com`,
-      linkedinUrl: `https://linkedin.com/company/${slug}`,
-      website: `https://${slug}.com`,
+      domain: validation?.domain || "",
+      linkedinUrl: validation?.linkedinUrl || safeLinkedInUrl(firstJob.company),
+      website: validation?.website || safeCompanySearchUrl(firstJob.company),
       industry: inferIndustry(companyJobs),
       employeeCount: 0, // Unknown — filters will handle this
       city,
       state,
       country: "US",
+      websiteVerified: validation?.websiteVerified || false,
     };
+
+    log.debug(`Built company: ${company.name}`, {
+      website: company.website,
+      verified: company.websiteVerified,
+      slug,
+    });
 
     // Build Signals (one per job posting)
     const signals: Signal[] = companyJobs.map((job, i) => ({
@@ -81,7 +115,9 @@ export function buildLeadsFromJobs(jobs: ScrapedJob[]): Lead[] {
     });
   }
 
-  return leads.sort((a, b) => b.score - a.score);
+  const sorted = leads.sort((a, b) => b.score - a.score);
+  timer.end(`Built ${sorted.length} leads from ${jobs.length} jobs`);
+  return sorted;
 }
 
 export function getIndustriesFromLeads(leads: Lead[]): string[] {
@@ -105,8 +141,6 @@ const SNIPPET_KEYWORDS_MED = [
   "salesforce", "sfdc", "sales cloud", "service cloud", "apex",
   "lightning", "soql", "visualforce", "flow builder", "crm",
 ];
-
-const ALL_SNIPPET_KEYWORDS = [...SNIPPET_KEYWORDS_HIGH, ...SNIPPET_KEYWORDS_MED];
 
 const WINDOW_RADIUS = 60; // chars before and after keyword
 const MAX_SNIPPETS = 3;

@@ -1,6 +1,9 @@
 import * as cheerio from "cheerio";
 import { SignalSource } from "./types";
 import { SCRAPED_JOBS, ScrapedJobRecord } from "./scraped-jobs-data";
+import { createLogger } from "./logger";
+
+const log = createLogger("scraper");
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -50,6 +53,7 @@ async function fetchJSON(url: string, timeoutMs = 15000): Promise<unknown> {
 
 async function fetchRemoteOK(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
+  const timer = log.time("remoteok");
 
   try {
     const data = await fetchJSON(
@@ -78,9 +82,9 @@ async function fetchRemoteOK(): Promise<ScrapedJob[]> {
       });
     }
 
-    console.log(`[scraper:remoteok] Found ${jobs.length} jobs`);
+    timer.end(`Found ${jobs.length} jobs`, { count: jobs.length });
   } catch (error) {
-    console.warn("[scraper:remoteok] Failed:", error);
+    log.warn("RemoteOK failed", { error: String(error) });
   }
 
   return jobs;
@@ -90,6 +94,7 @@ async function fetchRemoteOK(): Promise<ScrapedJob[]> {
 
 async function fetchArbeitnow(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
+  const timer = log.time("arbeitnow");
 
   try {
     const data = (await fetchJSON(
@@ -117,9 +122,9 @@ async function fetchArbeitnow(): Promise<ScrapedJob[]> {
       });
     }
 
-    console.log(`[scraper:arbeitnow] Found ${jobs.length} jobs`);
+    timer.end(`Found ${jobs.length} jobs`, { count: jobs.length });
   } catch (error) {
-    console.warn("[scraper:arbeitnow] Failed:", error);
+    log.warn("Arbeitnow failed", { error: String(error) });
   }
 
   return jobs;
@@ -129,6 +134,7 @@ async function fetchArbeitnow(): Promise<ScrapedJob[]> {
 
 async function fetchJobicy(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
+  const timer = log.time("jobicy");
 
   try {
     const data = (await fetchJSON(
@@ -154,9 +160,9 @@ async function fetchJobicy(): Promise<ScrapedJob[]> {
       });
     }
 
-    console.log(`[scraper:jobicy] Found ${jobs.length} jobs`);
+    timer.end(`Found ${jobs.length} jobs`, { count: jobs.length });
   } catch (error) {
-    console.warn("[scraper:jobicy] Failed:", error);
+    log.warn("Jobicy failed", { error: String(error) });
   }
 
   return jobs;
@@ -166,6 +172,7 @@ async function fetchJobicy(): Promise<ScrapedJob[]> {
 
 async function fetchHimalayas(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
+  const timer = log.time("himalayas");
 
   try {
     const data = (await fetchJSON(
@@ -191,9 +198,9 @@ async function fetchHimalayas(): Promise<ScrapedJob[]> {
       });
     }
 
-    console.log(`[scraper:himalayas] Found ${jobs.length} jobs`);
+    timer.end(`Found ${jobs.length} jobs`, { count: jobs.length });
   } catch (error) {
-    console.warn("[scraper:himalayas] Failed:", error);
+    log.warn("Himalayas failed", { error: String(error) });
   }
 
   return jobs;
@@ -207,11 +214,12 @@ async function fetchHimalayas(): Promise<ScrapedJob[]> {
 async function fetchGoogleJobs(): Promise<ScrapedJob[]> {
   const apiKey = process.env.SERPAPI_KEY;
   if (!apiKey) {
-    console.log("[scraper:google_jobs] No SERPAPI_KEY set — skipping");
+    log.info("No SERPAPI_KEY set — skipping Google Jobs");
     return [];
   }
 
   const jobs: ScrapedJob[] = [];
+  const timer = log.time("google_jobs");
   const queries = [
     "salesforce administrator",
     "salesforce developer",
@@ -277,11 +285,11 @@ async function fetchGoogleJobs(): Promise<ScrapedJob[]> {
         });
       }
 
-      console.log(
-        `[scraper:google_jobs] Query "${query}" → ${results.length} results`
-      );
+      log.info(`Google Jobs query "${query}"`, {
+        results: results.length,
+      });
     } catch (error) {
-      console.warn(`[scraper:google_jobs] Query "${query}" failed:`, error);
+      log.warn(`Google Jobs query "${query}" failed`, { error: String(error) });
     }
   }
 
@@ -294,10 +302,173 @@ async function fetchGoogleJobs(): Promise<ScrapedJob[]> {
     return true;
   });
 
-  console.log(
-    `[scraper:google_jobs] Total: ${jobs.length} raw → ${unique.length} unique`
-  );
+  timer.end(`Google Jobs total`, { raw: jobs.length, unique: unique.length });
   return unique;
+}
+
+// ── Source 6: EarnBetter (via SerpAPI) ──────────────────────────────
+// EarnBetter.com blocks direct scraping (403). We fetch their listings
+// via SerpAPI Google Jobs, which indexes EarnBetter postings.
+// Also attempts direct HTML fetch as a bonus.
+
+async function fetchEarnBetter(): Promise<ScrapedJob[]> {
+  const jobs: ScrapedJob[] = [];
+  const timer = log.time("earnbetter");
+
+  // Strategy 1: Try direct HTML fetch (EarnBetter may allow server-side)
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch("https://earnbetter.com/app/job/browse/?q=salesforce", {
+      signal: controller.signal,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
+
+    clearTimeout(timeout);
+
+    if (response.ok) {
+      const html = await response.text();
+      const parsed = parseEarnBetterHTML(html);
+      jobs.push(...parsed);
+      log.info(`EarnBetter direct scrape succeeded`, { count: parsed.length });
+    } else {
+      log.debug(`EarnBetter direct fetch returned ${response.status}`);
+    }
+  } catch (error) {
+    log.debug("EarnBetter direct fetch failed (expected)", { error: String(error) });
+  }
+
+  // Strategy 2: Via SerpAPI Google Jobs with earnbetter-specific queries
+  const apiKey = process.env.SERPAPI_KEY;
+  if (apiKey && jobs.length === 0) {
+    try {
+      const params = new URLSearchParams({
+        engine: "google_jobs",
+        q: "salesforce administrator earnbetter",
+        api_key: apiKey,
+      });
+
+      const data = (await fetchJSON(
+        `https://serpapi.com/search.json?${params.toString()}`,
+        20000
+      )) as Record<string, unknown>;
+
+      const results = (data?.jobs_results || []) as Record<string, unknown>[];
+
+      for (const item of results) {
+        const company = String(item.company_name || "").trim();
+        const title = String(item.title || "").trim();
+        const via = String(item.via || "").toLowerCase();
+
+        if (!company || !title) continue;
+
+        // Only include results that are actually from EarnBetter
+        const isFromEarnBetter = via.includes("earnbetter") ||
+          String(item.description || "").toLowerCase().includes("earnbetter");
+
+        let description = String(item.description || "");
+        const highlights = item.job_highlights as Record<string, unknown>[] | undefined;
+        if (highlights && Array.isArray(highlights)) {
+          const snippets = highlights
+            .flatMap((h) => (h.items as string[]) || [])
+            .join(" ");
+          if (snippets) description = description || snippets;
+        }
+
+        const applyOptions = (item.apply_options || []) as Record<string, unknown>[];
+        const applyLink = applyOptions[0]?.link ? String(applyOptions[0].link) : "";
+        const extensions = (item.detected_extensions || {}) as Record<string, unknown>;
+        const postedAt = extensions.posted_at ? String(extensions.posted_at) : "";
+
+        jobs.push({
+          title,
+          company,
+          location: String(item.location || ""),
+          description: stripHTML(description).slice(0, 1000),
+          url: applyLink || `https://earnbetter.com/app/job/browse/?q=${encodeURIComponent(title)}`,
+          source: isFromEarnBetter ? "earnbetter" : "google_jobs",
+          detectedAt: postedAtToISO(postedAt),
+        });
+      }
+
+      log.info(`EarnBetter via SerpAPI`, { results: results.length, kept: jobs.length });
+    } catch (error) {
+      log.warn("EarnBetter SerpAPI query failed", { error: String(error) });
+    }
+  }
+
+  timer.end(`EarnBetter total`, { count: jobs.length });
+  return jobs;
+}
+
+function parseEarnBetterHTML(html: string): ScrapedJob[] {
+  const $ = cheerio.load(html);
+  const jobs: ScrapedJob[] = [];
+
+  // Try to find job cards in the HTML
+  // EarnBetter is a React SPA, so HTML may contain JSON data or rendered cards
+  $("script").each((_, el) => {
+    const content = $(el).html() || "";
+    // Look for embedded job data in __NEXT_DATA__ or similar
+    if (content.includes("__NEXT_DATA__") || content.includes("jobs")) {
+      try {
+        const dataMatch = content.match(/__NEXT_DATA__\s*=\s*({[\s\S]+?})\s*;?\s*$/m);
+        if (dataMatch) {
+          const data = JSON.parse(dataMatch[1]);
+          const pageProps = data?.props?.pageProps || {};
+          const jobList = pageProps.jobs || pageProps.results || [];
+
+          for (const job of jobList) {
+            const title = String(job.title || job.jobTitle || "").trim();
+            const company = String(job.company || job.companyName || "").trim();
+
+            if (title && company) {
+              jobs.push({
+                title,
+                company,
+                location: String(job.location || ""),
+                description: stripHTML(String(job.description || job.snippet || "")),
+                url: job.url || job.applyUrl || "",
+                source: "earnbetter",
+                detectedAt: String(job.postedAt || job.createdAt || new Date().toISOString()),
+              });
+            }
+          }
+        }
+      } catch {
+        // JSON parsing failed
+      }
+    }
+  });
+
+  // Also try standard card selectors
+  if (jobs.length === 0) {
+    $('[class*="job"], [class*="Job"], [data-testid*="job"]').each((_, el) => {
+      const $el = $(el);
+      const title = $el.find("h2, h3, [class*='title']").first().text().trim();
+      const company = $el.find("[class*='company']").first().text().trim();
+
+      if (title && company) {
+        jobs.push({
+          title,
+          company,
+          location: $el.find("[class*='location']").first().text().trim(),
+          description: $el.find("[class*='description'], [class*='snippet']").first().text().trim(),
+          url: $el.find("a").first().attr("href") || "",
+          source: "earnbetter",
+          detectedAt: new Date().toISOString(),
+        });
+      }
+    });
+  }
+
+  return jobs;
 }
 
 /** Convert relative time strings like "3 days ago" to ISO dates */
@@ -321,10 +492,11 @@ function postedAtToISO(postedAt: string): string {
   return new Date(now - amount * (ms[unit] || 0)).toISOString();
 }
 
-// ── Source 6: Indeed (HTML scraping) ─────────────────────────────────
+// ── Source 7: Indeed (HTML scraping) ─────────────────────────────────
 
 async function fetchIndeed(): Promise<ScrapedJob[]> {
   const allJobs: ScrapedJob[] = [];
+  const timer = log.time("indeed");
   const queries = ["salesforce administrator", "first salesforce admin"];
 
   for (const query of queries) {
@@ -358,11 +530,11 @@ async function fetchIndeed(): Promise<ScrapedJob[]> {
         await new Promise((r) => setTimeout(r, 2000));
       }
     } catch (error) {
-      console.warn(`[scraper:indeed] Query "${query}" failed:`, error);
+      log.warn(`Indeed query "${query}" failed`, { error: String(error) });
     }
   }
 
-  console.log(`[scraper:indeed] Found ${allJobs.length} jobs`);
+  timer.end(`Found ${allJobs.length} jobs`, { count: allJobs.length });
   return allJobs;
 }
 
@@ -646,23 +818,25 @@ export async function scrapeJobs(
     cachedJobs &&
     Date.now() - cacheTimestamp < CACHE_TTL
   ) {
-    console.log("[scraper] Returning cached results");
+    log.info("Returning cached results", { count: cachedJobs.length });
     return cachedJobs;
   }
 
-  console.log("[scraper] Starting multi-source job scrape...");
+  const timer = log.time("scrape-all");
+  log.info("Starting multi-source job scrape");
 
-  // Run ALL live sources in parallel
+  // Run ALL live sources in parallel (including EarnBetter)
   const results = await Promise.allSettled([
     fetchRemoteOK(),
     fetchArbeitnow(),
     fetchJobicy(),
     fetchHimalayas(),
     fetchGoogleJobs(),
+    fetchEarnBetter(),
     fetchIndeed(),
   ]);
 
-  const sourceNames = ["RemoteOK", "Arbeitnow", "Jobicy", "Himalayas", "Google Jobs", "Indeed"];
+  const sourceNames = ["RemoteOK", "Arbeitnow", "Jobicy", "Himalayas", "Google Jobs", "EarnBetter", "Indeed"];
   const allJobs: ScrapedJob[] = [];
   const sourceCounts: Record<string, number> = {};
 
@@ -671,16 +845,14 @@ export async function scrapeJobs(
       allJobs.push(...result.value);
       sourceCounts[sourceNames[i]] = result.value.length;
     } else if (result.status === "rejected") {
-      console.warn(`[scraper] ${sourceNames[i]} rejected:`, result.reason);
+      log.warn(`${sourceNames[i]} rejected`, { error: String(result.reason) });
     }
   });
 
   // If live scraping returned nothing (e.g. network blocked), use bundled data
   if (allJobs.length === 0) {
     const bundled = loadBundledJobs();
-    console.log(
-      `[scraper] Live APIs returned 0 results — loading ${bundled.length} pre-scraped jobs from bundled data`
-    );
+    log.info(`Live APIs returned 0 — loading bundled data`, { count: bundled.length });
     allJobs.push(...bundled);
     sourceCounts["bundled"] = bundled.length;
   }
@@ -698,16 +870,21 @@ export async function scrapeJobs(
   const relevant = unique.filter((job) => {
     const pass = isSalesforcePrimaryRole(job);
     if (!pass) {
-      console.log(
-        `[scraper:filter] Rejected (not primary SF role): "${job.title}" at ${job.company}`
-      );
+      log.debug(`Rejected (not primary SF role)`, {
+        title: job.title,
+        company: job.company,
+      });
     }
     return pass;
   });
 
-  console.log(
-    `[scraper] Results: ${JSON.stringify(sourceCounts)} → ${allJobs.length} total, ${unique.length} unique, ${relevant.length} relevant (${unique.length - relevant.length} filtered out)`
-  );
+  timer.end("Scrape complete", {
+    sources: sourceCounts,
+    total: allJobs.length,
+    unique: unique.length,
+    relevant: relevant.length,
+    filtered: unique.length - relevant.length,
+  });
 
   // Cache results
   if (relevant.length > 0) {

@@ -14,6 +14,8 @@ import {
   Server,
   Newspaper,
   UserPlus,
+  CheckCircle2,
+  Search,
 } from "lucide-react";
 
 interface SignalPanelProps {
@@ -176,7 +178,15 @@ export function SignalPanel({ lead, onClose }: SignalPanelProps) {
             rel="noopener noreferrer"
             className="text-xs bg-white/20 hover:bg-white/30 px-2.5 py-1 rounded-md flex items-center gap-1 transition-colors"
           >
-            <Globe className="w-3 h-3" /> Website
+            {lead.company.websiteVerified ? (
+              <>
+                <CheckCircle2 className="w-3 h-3" /> Website
+              </>
+            ) : (
+              <>
+                <Search className="w-3 h-3" /> Search Website
+              </>
+            )}
           </a>
           <a
             href={lead.company.linkedinUrl}
@@ -184,7 +194,7 @@ export function SignalPanel({ lead, onClose }: SignalPanelProps) {
             rel="noopener noreferrer"
             className="text-xs bg-white/20 hover:bg-white/30 px-2.5 py-1 rounded-md flex items-center gap-1 transition-colors"
           >
-            <Linkedin className="w-3 h-3" /> LinkedIn
+            <Linkedin className="w-3 h-3" /> Find on LinkedIn
           </a>
         </div>
       </div>

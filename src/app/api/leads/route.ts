@@ -3,8 +3,13 @@ import { scrapeJobs } from "@/lib/scraper";
 import { buildLeadsFromJobs, getIndustriesFromLeads } from "@/lib/lead-builder";
 import { applyFilters } from "@/lib/filters";
 import { Filters, DEFAULT_FILTERS, Timeframe, SignalSource } from "@/lib/types";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("api/leads");
 
 export async function GET(request: NextRequest) {
+  const requestTimer = log.time("request");
+
   try {
     const { searchParams } = request.nextUrl;
 
@@ -27,35 +32,44 @@ export async function GET(request: NextRequest) {
       sources,
     };
 
+    log.info("Request received", {
+      timeframe,
+      forceRefresh,
+      industries: industries.length > 0 ? industries : undefined,
+      minScore: minScore > 0 ? minScore : undefined,
+    });
+
     // scrapeJobs() tries live APIs first, falls back to bundled real data
     let scrapedJobs: Awaited<ReturnType<typeof scrapeJobs>> = [];
     let dataSource: "live" | "bundled" = "live";
 
     try {
+      const scrapeTimer = log.time("scrape");
       scrapedJobs = await Promise.race([
         scrapeJobs(forceRefresh),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("Scraper timeout after 20s")), 20000)
         ),
       ]);
+      scrapeTimer.end("Scraping complete", { jobs: scrapedJobs.length });
     } catch (err) {
-      console.warn("[api/leads] Scraper failed or timed out:", err);
+      log.warn("Scraper failed or timed out", { error: String(err) });
     }
 
-    // Build leads from whatever we got
-    const allLeads = scrapedJobs.length > 0 ? buildLeadsFromJobs(scrapedJobs) : [];
+    // Build leads from whatever we got (now async — includes URL validation)
+    const buildTimer = log.time("build-leads");
+    const allLeads = scrapedJobs.length > 0 ? await buildLeadsFromJobs(scrapedJobs) : [];
+    buildTimer.end("Leads built", { count: allLeads.length });
+
     const availableIndustries = getIndustriesFromLeads(allLeads);
 
-    // Detect if data came from bundled fallback (scraper logs this)
+    // Detect if data came from bundled fallback
     if (scrapedJobs.length > 0) {
-      // Check if any job has a bundled source indicator
       const hasBundledOnly = scrapedJobs.every(
-        (j) => !["remoteok", "arbeitnow", "jobicy", "himalayas", "indeed"].includes(j.source) === false
+        (j) => !["remoteok", "arbeitnow", "jobicy", "himalayas", "indeed", "earnbetter"].includes(j.source) === false
       );
       dataSource = hasBundledOnly ? "live" : "bundled";
     }
-
-    console.log(`[api/leads] Serving ${allLeads.length} leads (${dataSource}) from ${scrapedJobs.length} scraped jobs`);
 
     const filtered = applyFilters(allLeads, filters);
 
@@ -64,6 +78,12 @@ export async function GET(request: NextRequest) {
       ...lead,
       signals: lead.signals.map(({ raw, ...rest }) => rest),
     }));
+
+    requestTimer.end("Response ready", {
+      total: allLeads.length,
+      filtered: filtered.length,
+      dataSource,
+    });
 
     return NextResponse.json(
       {
@@ -81,7 +101,9 @@ export async function GET(request: NextRequest) {
       }
     );
   } catch (err) {
-    console.error("[api/leads] Unhandled error:", err);
+    log.error("Unhandled error", { error: String(err), stack: (err as Error)?.stack });
+    requestTimer.end("Request failed with error");
+
     return NextResponse.json(
       {
         leads: [],

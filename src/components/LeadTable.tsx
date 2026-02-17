@@ -10,6 +10,8 @@ import {
   Wifi,
   Newspaper,
   ArrowUpRight,
+  CheckCircle2,
+  AlertCircle,
 } from "lucide-react";
 
 interface LeadTableProps {
@@ -26,6 +28,7 @@ const sourceIcons: Record<SignalSource, React.ReactNode> = {
   arbeitnow: <Search className="w-3.5 h-3.5 text-cyan-600" />,
   jobicy: <Globe className="w-3.5 h-3.5 text-violet-500" />,
   himalayas: <Search className="w-3.5 h-3.5 text-emerald-600" />,
+  earnbetter: <Globe className="w-3.5 h-3.5 text-orange-500" />,
   greenhouse: <FileText className="w-3.5 h-3.5 text-green-600" />,
   lever: <FileText className="w-3.5 h-3.5 text-orange-500" />,
   builtwith: <Database className="w-3.5 h-3.5 text-amber-600" />,
@@ -133,6 +136,15 @@ export function LeadTable({
                         <span className="text-sm font-semibold text-gray-900">
                           {lead.company.name}
                         </span>
+                        {lead.company.websiteVerified ? (
+                          <span title="Website verified">
+                            <CheckCircle2 className="w-3 h-3 text-green-500" />
+                          </span>
+                        ) : (
+                          <span title="Links go to search (unverified)">
+                            <AlertCircle className="w-3 h-3 text-amber-400" />
+                          </span>
+                        )}
                         <a
                           href={lead.company.linkedinUrl}
                           target="_blank"

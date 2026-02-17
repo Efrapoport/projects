@@ -44,7 +44,18 @@ All 4 sources are queried in parallel on every `/api/leads` request (with a 30-m
 SerpAPI is the most valuable source because it aggregates across all major job boards.
 If `SERPAPI_KEY` is not set, this source is skipped gracefully (no error).
 
-### 2c. Indeed HTML Scraping (free, fragile)
+### 2c. EarnBetter (via SerpAPI + direct scraping)
+
+| Config | Value |
+|--------|-------|
+| **Method 1** | Direct HTML fetch of `earnbetter.com/app/job/browse/?q=salesforce` |
+| **Method 2** | SerpAPI query: `"salesforce administrator earnbetter"` |
+| **Source tag** | `earnbetter` (when confirmed from EarnBetter), otherwise `google_jobs` |
+
+EarnBetter blocks direct scraping (403), so we primarily rely on SerpAPI Google Jobs
+to pick up their listings. The direct fetch is attempted first as a bonus.
+
+### 2d. Indeed HTML Scraping (free, fragile)
 
 | Config | Value |
 |--------|-------|
@@ -55,7 +66,7 @@ If `SERPAPI_KEY` is not set, this source is skipped gracefully (no error).
 Indeed blocks scrapers aggressively. This source works intermittently and serves as a bonus
 when available. SerpAPI's Google Jobs already captures Indeed results more reliably.
 
-### 2d. Bundled Data (fallback)
+### 2e. Bundled Data (fallback)
 
 If all live API calls fail (e.g., network proxy blocking outbound), the scraper falls back to
 `src/lib/scraped-jobs-data.ts` — a bundled set of 50+ real Salesforce job postings from Feb 2026.
@@ -63,27 +74,62 @@ This ensures the dashboard always has data to display.
 
 ---
 
-## 3. Filtering Pipeline
+## 3. Data Integrity Service
+
+The data integrity service (`src/lib/data-integrity.ts`) ensures all company URLs are real
+and accessible. Previously, company websites were guessed by slugifying the name (e.g.,
+"TrueML" → `trueml.com`), which often led to broken links or wrong companies.
+
+### How it works:
+
+1. **URL Validation**: Every company website is checked via HEAD request
+2. **Safe Fallbacks**: Invalid URLs are replaced with Google search URLs
+3. **LinkedIn**: Always uses search URL (`linkedin.com/search/results/companies/?keywords=...`)
+   instead of guessing direct company page URLs — this always works
+4. **Caching**: Validation results cached for 1 hour to avoid repeated checks
+5. **Timeout**: Batch validation has an 8-second timeout; unvalidated companies get safe fallbacks
+
+### UI Indicators:
+
+- Green checkmark: Website URL verified (responds with 2xx)
+- Amber warning: Website unverified — link goes to Google search for the company
+- "Find on LinkedIn" button: Always opens LinkedIn company search
+- "Search Website" button: Opens Google search (when website is unverified)
+
+---
+
+## 4. Filtering Pipeline
 
 Every scraped job goes through these filters before appearing on the dashboard:
 
 ```
-Raw jobs from all sources
+Raw jobs from all sources (7+ APIs in parallel)
     │
     ▼
 [1] Dedup by company+title (case-insensitive)
     │
     ▼
 [2] isSalesforcePrimaryRole() — relevance filter
+    │   ├── Title check: dedicated SF role vs non-SF role
+    │   ├── Description check: qualifying vs disqualifying patterns
+    │   └── Override: 2+ qualifying signals needed to override disqualifiers
     │
     ▼
-[3] Title-level role filter — dedicated SF roles only
+[3] Build leads (group by company, score, extract snippets)
+    │
+    ▼
+[4] Validate company URLs (HEAD requests, 8s timeout)
+    │   ├── Valid → use direct URL (green checkmark)
+    │   └── Invalid → use safe search URL (amber warning)
+    │
+    ▼
+[5] Apply user filters (timeframe, size, industry, score)
     │
     ▼
 Dashboard leads
 ```
 
-### 3a. Title-Level Role Filter
+### 4a. Title-Level Role Filter
 
 **Accepted titles** (dedicated Salesforce roles):
 ```
@@ -104,7 +150,7 @@ Examples:
 - "Java Developer - Salesforce Platform Team" -> REJECT
 - "DevOps Engineer (Salesforce CI/CD)" -> REJECT
 
-### 3b. Description-Level Relevance Filter
+### 4b. Description-Level Relevance Filter
 
 When the title doesn't clearly indicate a Salesforce role, the description is analyzed:
 
@@ -131,7 +177,7 @@ signals** to override. A single weak match (like "Salesforce certif" in a senten
 
 ---
 
-## 4. Scoring
+## 5. Scoring
 
 Leads are scored 0-100 based on signal strength:
 
@@ -148,7 +194,7 @@ Leads are scored 0-100 based on signal strength:
 
 ---
 
-## 5. Signal Display (SignalPanel)
+## 6. Signal Display (SignalPanel)
 
 The panel shows **relevant snippets** extracted from the job description, not the full text.
 Sentences are scored by keyword relevance and only the top 3 are shown.
@@ -162,10 +208,81 @@ Each signal card displays:
 
 ---
 
-## 6. Changelog
+## 7. Logging System
+
+The structured logging system (`src/lib/logger.ts`) captures every step of the pipeline:
+
+- **Levels**: debug, info, warn, error (configurable via `LOG_LEVEL` env var)
+- **Tags**: Each module has its own tag (scraper, lead-builder, data-integrity, api/leads, doc-generator)
+- **Timestamps**: ISO 8601 format
+- **Duration tracking**: `log.time('label')` returns a timer; call `.end()` to log duration
+- **In-memory buffer**: Last 1000 entries available via `/api/logs`
+- **Console output**: All logs go to stdout/stderr for Vercel's log stream
+
+### Viewing Logs
+
+```
+GET /api/logs                    → all recent logs
+GET /api/logs?level=error        → errors only
+GET /api/logs?tag=scraper        → scraper logs only
+GET /api/logs?limit=50           → last 50 entries
+GET /api/logs?level=warn&tag=integrity → combined filters
+```
+
+---
+
+## 8. Documentation System
+
+Documentation is auto-generated from source code metadata:
+
+- **Web page**: Visit `/docs` for a formatted, always-current documentation page
+- **JSON API**: `GET /api/docs/generate` returns structured documentation
+- **Source file**: `docs/hr-signals.md` (this file) is the master reference
+- **Auto-updating**: The `/docs` page regenerates from `src/lib/doc-generator.ts` on every load
+
+---
+
+## 9. System Architecture
+
+| Component | File | Description |
+|-----------|------|-------------|
+| **Scraper** | `src/lib/scraper.ts` | Multi-source job scraper (7+ APIs in parallel, 30-min cache) |
+| **Lead Builder** | `src/lib/lead-builder.ts` | Transforms jobs → scored leads with URL validation |
+| **Data Integrity** | `src/lib/data-integrity.ts` | Validates company URLs via HEAD requests |
+| **Scoring Engine** | `src/lib/scoring.ts` | Scores leads 0-100 based on signal strength |
+| **Logger** | `src/lib/logger.ts` | Structured logging with in-memory buffer |
+| **Filter Engine** | `src/lib/filters.ts` | Timeframe, size, industry, score filters |
+| **Doc Generator** | `src/lib/doc-generator.ts` | Auto-generates documentation from source code |
+
+### API Endpoints
+
+| Path | Method | Description |
+|------|--------|-------------|
+| `/api/leads` | GET | Main data endpoint — scrape, build, validate, filter |
+| `/api/logs` | GET | View structured log entries |
+| `/api/docs/generate` | GET | Auto-generated documentation (JSON) |
+| `/api/digest/preview` | GET | Email digest preview (HTML) |
+
+### Pages
+
+| Path | Description |
+|------|-------------|
+| `/` | Main dashboard |
+| `/docs` | Auto-generated documentation page |
+
+---
+
+## 10. Changelog
 
 | Date | Change | Files |
 |------|--------|-------|
+| 2026-02-17 | Added structured logging system with levels, tags, timing, and in-memory buffer | `logger.ts`, all modules |
+| 2026-02-17 | Added data integrity service: URL validation, safe fallbacks, verification badges | `data-integrity.ts`, `lead-builder.ts`, `LeadTable.tsx`, `SignalPanel.tsx` |
+| 2026-02-17 | Added EarnBetter as job source (direct scraping + SerpAPI fallback) | `scraper.ts`, `types.ts` |
+| 2026-02-17 | Added auto-updating documentation system with /docs page and /api/docs/generate | `doc-generator.ts`, `/docs/page.tsx`, `/api/docs/generate/route.ts` |
+| 2026-02-17 | Added /api/logs endpoint for viewing structured logs | `/api/logs/route.ts` |
+| 2026-02-17 | Company URLs now validated via HEAD requests instead of being invented | `lead-builder.ts`, `data-integrity.ts` |
+| 2026-02-17 | LinkedIn links now use search URLs (always work) instead of guessed direct links | `lead-builder.ts`, `data-integrity.ts` |
 | 2026-02-17 | Expanded disqualifying patterns: added "not mandatory/necessary/essential" without requiring "but" prefix; added "would be a plus/advantage/asset"; added "familiarity/exposure" weak signals | `scraper.ts` |
 | 2026-02-17 | Stricter override: disqualifying + qualifying now requires 2+ qualifying signals instead of 1 | `scraper.ts` |
 | 2026-02-17 | Title-level role filter: whitelist of dedicated SF roles, blacklist of non-SF roles (AWS, Java, DevOps, etc.) | `scraper.ts` |
@@ -176,7 +293,7 @@ Each signal card displays:
 
 ---
 
-## 7. Future Improvements
+## 11. Future Improvements
 
 _Add planned changes here as they come up._
 
@@ -185,3 +302,6 @@ _Add planned changes here as they come up._
 - [ ] Glassdoor company reviews mentioning Salesforce adoption
 - [ ] Weighted scoring tuning based on conversion data
 - [ ] Contact enrichment (Apollo/Hunter.io) for decision-maker emails
+- [ ] Database persistence (PostgreSQL) for lead history
+- [ ] Authentication and user accounts
+- [ ] Export leads as CSV/Excel

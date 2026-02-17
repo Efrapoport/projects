@@ -101,7 +101,7 @@ console.log("╚═════════════════════�
 console.log(`Input: ${realisticJobs.length} scraped jobs from ${new Set(realisticJobs.map(j => j.source)).size} sources\n`);
 
 // Step 1: Build leads
-const leads = buildLeadsFromJobs(realisticJobs);
+const leads = await buildLeadsFromJobs(realisticJobs);
 console.log(`Step 1 — buildLeadsFromJobs: ${leads.length} leads (deduplicated by company)\n`);
 
 // Step 2: Show each lead

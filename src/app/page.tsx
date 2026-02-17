@@ -18,7 +18,7 @@ export default async function Home() {
     ]);
 
     if (jobs.length > 0) {
-      const allLeads = buildLeadsFromJobs(jobs);
+      const allLeads = await buildLeadsFromJobs(jobs);
       const industries = getIndustriesFromLeads(allLeads);
       const filtered = applyFilters(allLeads, DEFAULT_FILTERS);
 

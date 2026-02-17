@@ -8,6 +8,7 @@ export type SignalSource =
   | "arbeitnow"
   | "jobicy"
   | "himalayas"
+  | "earnbetter"
   | "greenhouse"
   | "lever"
   | "builtwith"
@@ -55,6 +56,7 @@ export interface Company {
   state: string;
   country: string;
   logoUrl?: string;
+  websiteVerified?: boolean;
 }
 
 export interface Contact {
