@@ -79,10 +79,17 @@ export async function GET(request: NextRequest) {
       signals: lead.signals.map(({ raw, ...rest }) => rest),
     }));
 
+    // Build source breakdown from scraped jobs
+    const sourceBreakdown: Record<string, number> = {};
+    for (const job of scrapedJobs) {
+      sourceBreakdown[job.source] = (sourceBreakdown[job.source] || 0) + 1;
+    }
+
     requestTimer.end("Response ready", {
       total: allLeads.length,
       filtered: filtered.length,
       dataSource,
+      sourceBreakdown,
     });
 
     return NextResponse.json(
@@ -92,6 +99,7 @@ export async function GET(request: NextRequest) {
         filtered: filtered.length,
         industries: availableIndustries,
         dataSource,
+        sourceBreakdown,
       },
       {
         headers: {
