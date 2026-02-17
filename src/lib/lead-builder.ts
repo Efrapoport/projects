@@ -90,48 +90,91 @@ export function getIndustriesFromLeads(leads: Lead[]): string[] {
 }
 
 // ── Snippet Extraction ──────────────────────────────────────────────
-// Instead of dumping the full job description, pull out only the most
-// relevant sentences (ones containing Salesforce-related keywords).
+// Pull out only the most relevant fragments from a job description.
+// Scraped descriptions are often one giant unpunctuated block (HTML
+// stripped), so we find keywords and extract a text window around each.
 
-const SNIPPET_KEYWORDS = [
-  "salesforce", "sfdc", "sales cloud", "service cloud", "apex",
-  "lightning", "soql", "visualforce", "flow builder", "crm",
-  "first", "greenfield", "build from scratch", "sole contributor",
+const SNIPPET_KEYWORDS_HIGH = [
+  "greenfield", "build from scratch", "sole contributor",
   "initial setup", "standing up", "net new", "transition from",
-  "migrating from", "founding", "owning",
+  "migrating from", "founding", "first salesforce", "first admin",
+  "first hire", "owning our instance",
 ];
 
-function extractRelevantSnippets(description: string, maxSnippets = 3): string {
+const SNIPPET_KEYWORDS_MED = [
+  "salesforce", "sfdc", "sales cloud", "service cloud", "apex",
+  "lightning", "soql", "visualforce", "flow builder", "crm",
+];
+
+const ALL_SNIPPET_KEYWORDS = [...SNIPPET_KEYWORDS_HIGH, ...SNIPPET_KEYWORDS_MED];
+
+const WINDOW_RADIUS = 60; // chars before and after keyword
+const MAX_SNIPPETS = 3;
+const MAX_TOTAL_LEN = 300;
+
+function extractRelevantSnippets(description: string): string {
   if (!description) return "";
 
-  // Split into sentences (approximate — handles ". ", "! ", "? ", and newlines)
-  const sentences = description
-    .split(/(?<=[.!?])\s+|\n+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 10);
+  // Short descriptions don't need extraction
+  if (description.length <= MAX_TOTAL_LEN) return description;
 
-  const lower = (s: string) => s.toLowerCase();
+  const lc = description.toLowerCase();
 
-  // Score each sentence by how many keywords it contains
-  const scored = sentences.map((sentence) => {
-    const lc = lower(sentence);
-    const hits = SNIPPET_KEYWORDS.filter((kw) => lc.includes(kw)).length;
-    return { sentence, hits };
-  });
+  // Find all keyword occurrences with their priority (high > med)
+  const hits: { start: number; end: number; priority: number }[] = [];
 
-  // Take the top sentences that have at least 1 keyword hit
-  const relevant = scored
-    .filter((s) => s.hits > 0)
-    .sort((a, b) => b.hits - a.hits)
-    .slice(0, maxSnippets)
-    .map((s) => s.sentence);
-
-  if (relevant.length === 0) {
-    // Fallback: first 2 sentences
-    return sentences.slice(0, 2).join(" ");
+  for (const kw of SNIPPET_KEYWORDS_HIGH) {
+    let pos = lc.indexOf(kw);
+    while (pos !== -1) {
+      hits.push({ start: pos, end: pos + kw.length, priority: 2 });
+      pos = lc.indexOf(kw, pos + 1);
+    }
+  }
+  for (const kw of SNIPPET_KEYWORDS_MED) {
+    let pos = lc.indexOf(kw);
+    while (pos !== -1) {
+      hits.push({ start: pos, end: pos + kw.length, priority: 1 });
+      pos = lc.indexOf(kw, pos + 1);
+    }
   }
 
-  return relevant.join(" ... ");
+  if (hits.length === 0) {
+    return description.substring(0, MAX_TOTAL_LEN) + "...";
+  }
+
+  // Sort by priority desc, then by position
+  hits.sort((a, b) => b.priority - a.priority || a.start - b.start);
+
+  // Extract windows around each hit, snapping to word boundaries
+  const snippets: string[] = [];
+  const usedRanges: { start: number; end: number }[] = [];
+
+  for (const hit of hits) {
+    if (snippets.length >= MAX_SNIPPETS) break;
+
+    // Expand window around the keyword
+    let wStart = Math.max(0, hit.start - WINDOW_RADIUS);
+    let wEnd = Math.min(description.length, hit.end + WINDOW_RADIUS);
+
+    // Snap to word boundaries
+    while (wStart > 0 && description[wStart - 1] !== " ") wStart--;
+    while (wEnd < description.length && description[wEnd] !== " ") wEnd++;
+
+    // Skip if this window overlaps significantly with an existing one
+    const overlaps = usedRanges.some(
+      (r) => wStart < r.end && wEnd > r.start
+    );
+    if (overlaps) continue;
+
+    let snippet = description.substring(wStart, wEnd).trim();
+    if (wStart > 0) snippet = "..." + snippet;
+    if (wEnd < description.length) snippet = snippet + "...";
+
+    snippets.push(snippet);
+    usedRanges.push({ start: wStart, end: wEnd });
+  }
+
+  return snippets.join("  ");
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
