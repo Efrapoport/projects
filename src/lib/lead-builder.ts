@@ -58,9 +58,12 @@ export function buildLeadsFromJobs(jobs: ScrapedJob[]): Lead[] {
     const score = computeLeadScore(signals);
     const triggerEvent = generateTriggerEvent(signals);
 
-    const dates = signals.map((s) => new Date(s.detectedAt).getTime());
-    const firstDetected = new Date(Math.min(...dates)).toISOString();
-    const lastUpdated = new Date(Math.max(...dates)).toISOString();
+    const dates = signals
+      .map((s) => new Date(s.detectedAt).getTime())
+      .filter((t) => Number.isFinite(t));
+    const now = new Date().toISOString();
+    const firstDetected = dates.length > 0 ? new Date(Math.min(...dates)).toISOString() : now;
+    const lastUpdated = dates.length > 0 ? new Date(Math.max(...dates)).toISOString() : now;
 
     const contacts: Contact[] = [];
 
