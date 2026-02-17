@@ -199,7 +199,129 @@ async function fetchHimalayas(): Promise<ScrapedJob[]> {
   return jobs;
 }
 
-// ── Source 5: Indeed (HTML scraping) ─────────────────────────────────
+// ── Source 5: SerpAPI Google Jobs ────────────────────────────────────
+// Aggregates results from Google Jobs (which pulls from LinkedIn, Indeed,
+// Glassdoor, ZipRecruiter, and more) via the SerpAPI service.
+// Requires SERPAPI_KEY env var. Skipped gracefully if not set.
+
+async function fetchGoogleJobs(): Promise<ScrapedJob[]> {
+  const apiKey = process.env.SERPAPI_KEY;
+  if (!apiKey) {
+    console.log("[scraper:google_jobs] No SERPAPI_KEY set — skipping");
+    return [];
+  }
+
+  const jobs: ScrapedJob[] = [];
+  const queries = [
+    "salesforce administrator",
+    "salesforce developer",
+    "first salesforce admin",
+  ];
+
+  for (const query of queries) {
+    try {
+      const params = new URLSearchParams({
+        engine: "google_jobs",
+        q: query,
+        api_key: apiKey,
+      });
+
+      const data = (await fetchJSON(
+        `https://serpapi.com/search.json?${params.toString()}`,
+        20000
+      )) as Record<string, unknown>;
+
+      const results = (data?.jobs_results || []) as Record<string, unknown>[];
+
+      for (const item of results) {
+        const company = String(item.company_name || "").trim();
+        const title = String(item.title || "").trim();
+
+        if (!company || !title) continue;
+
+        // Extract the "via" source (e.g. "via LinkedIn", "via Indeed")
+        const via = String(item.via || "").replace(/^via\s+/i, "");
+
+        // Build description from highlights if available
+        let description = String(item.description || "");
+        const highlights = item.job_highlights as Record<string, unknown>[] | undefined;
+        if (highlights && Array.isArray(highlights)) {
+          const snippets = highlights
+            .flatMap((h) => (h.items as string[]) || [])
+            .join(" ");
+          if (snippets) {
+            description = description || snippets;
+          }
+        }
+
+        // Extract apply link if available
+        const applyOptions = (item.apply_options || []) as Record<string, unknown>[];
+        const applyLink = applyOptions[0]?.link
+          ? String(applyOptions[0].link)
+          : "";
+
+        // Detect posting age from extensions (e.g. "3 days ago")
+        const extensions = (item.detected_extensions || {}) as Record<string, unknown>;
+        const postedAt = extensions.posted_at
+          ? String(extensions.posted_at)
+          : "";
+
+        jobs.push({
+          title,
+          company,
+          location: String(item.location || ""),
+          description: stripHTML(description).slice(0, 1000),
+          url: applyLink || `https://www.google.com/search?q=${encodeURIComponent(`${title} ${company} jobs`)}`,
+          source: "google_jobs",
+          detectedAt: postedAtToISO(postedAt),
+        });
+      }
+
+      console.log(
+        `[scraper:google_jobs] Query "${query}" → ${results.length} results`
+      );
+    } catch (error) {
+      console.warn(`[scraper:google_jobs] Query "${query}" failed:`, error);
+    }
+  }
+
+  // Deduplicate within Google Jobs results (same title+company from different queries)
+  const seen = new Set<string>();
+  const unique = jobs.filter((job) => {
+    const key = `${job.company.toLowerCase()}|${job.title.toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  console.log(
+    `[scraper:google_jobs] Total: ${jobs.length} raw → ${unique.length} unique`
+  );
+  return unique;
+}
+
+/** Convert relative time strings like "3 days ago" to ISO dates */
+function postedAtToISO(postedAt: string): string {
+  if (!postedAt) return new Date().toISOString();
+
+  const now = Date.now();
+  const match = postedAt.match(/(\d+)\s*(hour|day|week|month)/i);
+  if (!match) return new Date().toISOString();
+
+  const amount = parseInt(match[1], 10);
+  const unit = match[2].toLowerCase();
+
+  const ms: Record<string, number> = {
+    hour: 60 * 60 * 1000,
+    day: 24 * 60 * 60 * 1000,
+    week: 7 * 24 * 60 * 60 * 1000,
+    month: 30 * 24 * 60 * 60 * 1000,
+  };
+
+  return new Date(now - amount * (ms[unit] || 0)).toISOString();
+}
+
+// ── Source 6: Indeed (HTML scraping) ─────────────────────────────────
 
 async function fetchIndeed(): Promise<ScrapedJob[]> {
   const allJobs: ScrapedJob[] = [];
@@ -517,10 +639,11 @@ export async function scrapeJobs(
     fetchArbeitnow(),
     fetchJobicy(),
     fetchHimalayas(),
+    fetchGoogleJobs(),
     fetchIndeed(),
   ]);
 
-  const sourceNames = ["RemoteOK", "Arbeitnow", "Jobicy", "Himalayas", "Indeed"];
+  const sourceNames = ["RemoteOK", "Arbeitnow", "Jobicy", "Himalayas", "Google Jobs", "Indeed"];
   const allJobs: ScrapedJob[] = [];
   const sourceCounts: Record<string, number> = {};
 

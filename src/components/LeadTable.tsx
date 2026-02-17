@@ -21,6 +21,7 @@ interface LeadTableProps {
 const sourceIcons: Record<SignalSource, React.ReactNode> = {
   linkedin: <Linkedin className="w-3.5 h-3.5 text-blue-600" />,
   indeed: <Search className="w-3.5 h-3.5 text-purple-600" />,
+  google_jobs: <Globe className="w-3.5 h-3.5 text-blue-500" />,
   remoteok: <Globe className="w-3.5 h-3.5 text-red-500" />,
   arbeitnow: <Search className="w-3.5 h-3.5 text-cyan-600" />,
   jobicy: <Globe className="w-3.5 h-3.5 text-violet-500" />,
