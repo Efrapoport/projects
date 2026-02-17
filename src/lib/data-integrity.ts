@@ -421,6 +421,131 @@ export async function batchEnrichEmployeeCounts(
   return results;
 }
 
+// ── LinkedIn Company Page Employee Count Fallback ────────────────────
+// When the generic SerpAPI query and JD parsing both fail to find an
+// employee count, we try `site:linkedin.com/company "CompanyName"`.
+// Google often indexes LinkedIn company pages with snippets like
+// "501-1,000 employees" or "3,296 employees on LinkedIn".
+
+/**
+ * Look up employee count from a company's LinkedIn page via SerpAPI.
+ * This is a targeted fallback — only called for companies where the
+ * primary lookup and JD extraction both returned 0.
+ */
+export async function lookupEmployeeCountLinkedIn(
+  companyName: string,
+  apiKey: string,
+): Promise<number> {
+  const cacheKey = `linkedin:${companyName.toLowerCase().trim()}`;
+  const cached = employeeCache.get(cacheKey);
+  if (cached && Date.now() - cached.checkedAt < EMPLOYEE_CACHE_TTL) {
+    return cached.count;
+  }
+
+  try {
+    const params = new URLSearchParams({
+      engine: "google",
+      q: `site:linkedin.com/company "${companyName}" employees`,
+      api_key: apiKey,
+      num: "5",
+    });
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch(
+      `https://serpapi.com/search.json?${params.toString()}`,
+      { signal: controller.signal, headers: { Accept: "application/json" } },
+    );
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      employeeCache.set(cacheKey, { count: 0, checkedAt: Date.now() });
+      return 0;
+    }
+
+    const data = (await response.json()) as Record<string, unknown>;
+    let count = 0;
+
+    // Parse snippets from organic results — LinkedIn pages show
+    // "501-1,000 employees" or "5,296 employees on LinkedIn"
+    const organic = (data.organic_results || []) as Record<string, unknown>[];
+    for (const result of organic.slice(0, 5)) {
+      const snippet = String(result.snippet || "");
+      const title = String(result.title || "");
+      const text = `${snippet} ${title}`;
+
+      // LinkedIn-specific range format: "501-1,000 employees"
+      const rangeMatch = text.match(
+        /([\d,]+)\s*[-–]\s*([\d,]+)\s*employee/i,
+      );
+      if (rangeMatch) {
+        count = parseNumericValue(rangeMatch[2]); // upper bound
+        break;
+      }
+
+      // Absolute count: "5,296 employees on LinkedIn"
+      count = extractEmployeeCountFromText(text);
+      if (count > 0) break;
+    }
+
+    employeeCache.set(cacheKey, { count, checkedAt: Date.now() });
+    return count;
+  } catch {
+    employeeCache.set(cacheKey, { count: 0, checkedAt: Date.now() });
+    return 0;
+  }
+}
+
+/**
+ * Batch fallback: look up employee counts via LinkedIn company pages
+ * for companies that still have 0 after primary enrichment + JD parsing.
+ */
+export async function batchLinkedInEmployeeFallback(
+  companies: Array<{ name: string }>,
+  timeoutMs = 12000,
+): Promise<Map<string, number>> {
+  const apiKey = process.env.SERPAPI_KEY;
+  if (!apiKey) return new Map();
+
+  const timer = log.time("linkedin-employee-fallback");
+  const results = new Map<string, number>();
+  const CONCURRENCY = 3;
+
+  const timeoutPromise = new Promise<"timeout">((resolve) =>
+    setTimeout(() => resolve("timeout"), timeoutMs),
+  );
+
+  const enrichPromise = (async () => {
+    for (let i = 0; i < companies.length; i += CONCURRENCY) {
+      const batch = companies.slice(i, i + CONCURRENCY);
+      const batchResults = await Promise.allSettled(
+        batch.map((c) => lookupEmployeeCountLinkedIn(c.name, apiKey)),
+      );
+
+      batchResults.forEach((result, j) => {
+        const key = batch[j].name.toLowerCase().trim();
+        results.set(key, result.status === "fulfilled" ? result.value : 0);
+      });
+    }
+    return "done";
+  })();
+
+  const winner = await Promise.race([enrichPromise, timeoutPromise]);
+
+  if (winner === "timeout") {
+    log.warn("LinkedIn employee fallback timed out", {
+      enriched: results.size,
+      total: companies.length,
+    });
+  }
+
+  const found = Array.from(results.values()).filter((v) => v > 0).length;
+  timer.end("LinkedIn employee fallback", { total: companies.length, found });
+  return results;
+}
+
 // ── LinkedIn Contact Lookup via SerpAPI ──────────────────────────────
 // Searches Google for `site:linkedin.com/in "Company" (title keywords)`
 // to find decision-makers who likely own Salesforce hiring decisions.
