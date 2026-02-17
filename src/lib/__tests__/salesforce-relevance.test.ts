@@ -113,6 +113,48 @@ const SHOULD_REJECT = [
       "Support the ops team with process improvement. Ideally has some Salesforce experience but we can train."
     ),
   },
+  {
+    name: "Salesforce is not mandatory",
+    job: makeJob(
+      "Customer Success Manager",
+      "Manage key accounts and ensure retention. CRM skills needed. Salesforce is not mandatory."
+    ),
+  },
+  {
+    name: "Salesforce experience is not essential",
+    job: makeJob(
+      "Growth Marketing Lead",
+      "Lead growth initiatives across paid channels. Salesforce experience is not essential but would be helpful."
+    ),
+  },
+  {
+    name: "Salesforce certification is not necessary",
+    job: makeJob(
+      "IT Support Specialist",
+      "Provide L1/L2 support. Salesforce certification is not necessary. ITIL certification preferred."
+    ),
+  },
+  {
+    name: "Salesforce would be a plus",
+    job: makeJob(
+      "Product Manager",
+      "Define product roadmap. Salesforce experience would be a plus. Must have shipped B2B products."
+    ),
+  },
+  {
+    name: "Salesforce would be an advantage",
+    job: makeJob(
+      "Business Development Rep",
+      "Prospect and qualify leads. Salesforce knowledge would be an advantage but not required."
+    ),
+  },
+  {
+    name: "Familiarity with Salesforce is a bonus",
+    job: makeJob(
+      "Data Engineer",
+      "Build data pipelines with Spark and Airflow. Familiarity with Salesforce is a bonus."
+    ),
+  },
 ];
 
 // ── Run Tests ────────────────────────────────────────────────────────

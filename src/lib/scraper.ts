@@ -557,12 +557,14 @@ function loadBundledJobs(): ScrapedJob[] {
 // Filters out jobs where Salesforce is just a "bonus", "nice-to-have", etc.
 
 const DISQUALIFYING_PATTERNS = [
-  // "Salesforce is a bonus/plus/nice-to-have"
-  /salesforce\s+(?:experience|knowledge|skills?|certification|familiarity|expertise)?\s*(?:is\s+)?(?:a\s+)?(?:bonus|plus|nice[- ]to[- ]have|preferred|optional|helpful|desirable|not required)/i,
+  // "Salesforce experience is a bonus/plus/nice-to-have/not required/not mandatory/..."
+  /salesforce\s+(?:experience|knowledge|skills?|certification|familiarity|expertise)?\s*(?:(?:is|would\s+be|are)\s+)?(?:a\s+)?(?:bonus|plus|nice[- ]to[- ]have|preferred|optional|helpful|desirable|an?\s+(?:advantage|asset)|not\s+(?:required|mandatory|necessary|essential))/i,
   // "bonus/plus/nice-to-have: ... Salesforce"
   /(?:bonus|plus|nice[- ]to[- ]have|preferred(?:\s+but\s+not\s+required)?|optional|helpful|desirable|ideally)[:\s,][^.;]*salesforce/i,
-  // "Salesforce ... but not required/necessary"
-  /salesforce[^.;]*but\s+not\s+(?:required|necessary|essential|mandatory)/i,
+  // "Salesforce ... [but] not required/mandatory/necessary/essential" (with or without "but")
+  /salesforce[^.;]{0,80}\bnot\s+(?:required|necessary|essential|mandatory)\b/i,
+  // Weak mention: "exposure to / familiarity with Salesforce" as a bonus
+  /(?:exposure|familiarity)\s+(?:to|with)\s+[^.;]*salesforce[^.;]*(?:(?:is|would\s+be)\s+)?(?:a\s+)?(?:bonus|plus|helpful|preferred|nice[- ]to[- ]have)/i,
 ];
 
 const QUALIFYING_PATTERNS = [
@@ -601,15 +603,16 @@ export function isSalesforcePrimaryRole(job: ScrapedJob): boolean {
   // Salesforce is in the description but not the title.
   // High bar: must have qualifying context AND no disqualifying context.
   const hasDisqualifying = DISQUALIFYING_PATTERNS.some((p) => p.test(desc));
-  const hasQualifying = QUALIFYING_PATTERNS.some((p) => p.test(desc));
+  const qualifyingCount = QUALIFYING_PATTERNS.filter((p) => p.test(desc)).length;
 
-  // Disqualifying language without strong qualifying context → reject
-  if (hasDisqualifying && !hasQualifying) {
-    return false;
+  // Disqualifying language present → require strong qualifying evidence
+  // (at least 2 independent qualifying signals to override the negative)
+  if (hasDisqualifying) {
+    return qualifyingCount >= 2;
   }
 
   // No qualifying context at all (just a passing mention) → reject
-  if (!hasQualifying) {
+  if (qualifyingCount === 0) {
     return false;
   }
 
