@@ -430,6 +430,70 @@ function loadBundledJobs(): ScrapedJob[] {
   }));
 }
 
+// ── Salesforce Relevance Filter ──────────────────────────────────────
+// Ensures only jobs where Salesforce is a PRIMARY requirement make it through.
+// Filters out jobs where Salesforce is just a "bonus", "nice-to-have", etc.
+
+const DISQUALIFYING_PATTERNS = [
+  // "Salesforce is a bonus/plus/nice-to-have"
+  /salesforce\s+(?:experience|knowledge|skills?|certification|familiarity|expertise)?\s*(?:is\s+)?(?:a\s+)?(?:bonus|plus|nice[- ]to[- ]have|preferred|optional|helpful|desirable|not required)/i,
+  // "bonus/plus/nice-to-have: ... Salesforce"
+  /(?:bonus|plus|nice[- ]to[- ]have|preferred(?:\s+but\s+not\s+required)?|optional|helpful|desirable|ideally)[:\s,][^.;]*salesforce/i,
+  // "Salesforce ... but not required/necessary"
+  /salesforce[^.;]*but\s+not\s+(?:required|necessary|essential|mandatory)/i,
+];
+
+const QUALIFYING_PATTERNS = [
+  // Role-specific: "Salesforce admin/developer/engineer"
+  /salesforce\s+(?:admin|administrator|developer|engineer|architect|consultant|specialist|analyst)/i,
+  // Platform ownership: "manage/own/administer ... Salesforce"
+  /(?:manage|administer|own|maintain|build|implement|configure|customize|optimize|oversee)\s+[^.;]*salesforce/i,
+  // Salesforce platform context
+  /salesforce\s+(?:platform|instance|environment|ecosystem|org\b|organization|deployment|implementation|migration|integration|configuration)/i,
+  // Required experience: "X+ years Salesforce"
+  /\d+\+?\s*years?\s+(?:of\s+)?salesforce/i,
+  // Explicit requirement: "Salesforce experience required"
+  /salesforce\s+(?:experience|knowledge|expertise)\s+(?:is\s+)?(?:required|essential|mandatory|necessary)/i,
+  // Certification
+  /salesforce\s+certif/i,
+  // Core tools: "Sales Cloud, Apex, Lightning"
+  /(?:sales\s+cloud|service\s+cloud|apex|lightning|soql|visualforce|flow\s+builder)/i,
+];
+
+export function isSalesforcePrimaryRole(job: ScrapedJob): boolean {
+  const title = job.title.toLowerCase();
+  const desc = (job.description || "").toLowerCase();
+
+  // Title explicitly mentions Salesforce → clearly a SF role
+  if (title.includes("salesforce") || title.includes("sfdc")) {
+    return true;
+  }
+
+  const text = `${title} ${desc}`;
+
+  // Salesforce not mentioned at all → not relevant
+  if (!text.includes("salesforce") && !text.includes("sfdc")) {
+    return false;
+  }
+
+  // Salesforce is in the description but not the title.
+  // High bar: must have qualifying context AND no disqualifying context.
+  const hasDisqualifying = DISQUALIFYING_PATTERNS.some((p) => p.test(desc));
+  const hasQualifying = QUALIFYING_PATTERNS.some((p) => p.test(desc));
+
+  // Disqualifying language without strong qualifying context → reject
+  if (hasDisqualifying && !hasQualifying) {
+    return false;
+  }
+
+  // No qualifying context at all (just a passing mention) → reject
+  if (!hasQualifying) {
+    return false;
+  }
+
+  return true;
+}
+
 // ── Public API ──────────────────────────────────────────────────────
 
 export async function scrapeJobs(
@@ -488,17 +552,28 @@ export async function scrapeJobs(
     return true;
   });
 
+  // Filter: only keep jobs where Salesforce is a PRIMARY requirement
+  const relevant = unique.filter((job) => {
+    const pass = isSalesforcePrimaryRole(job);
+    if (!pass) {
+      console.log(
+        `[scraper:filter] Rejected (not primary SF role): "${job.title}" at ${job.company}`
+      );
+    }
+    return pass;
+  });
+
   console.log(
-    `[scraper] Results: ${JSON.stringify(sourceCounts)} → ${allJobs.length} total, ${unique.length} unique`
+    `[scraper] Results: ${JSON.stringify(sourceCounts)} → ${allJobs.length} total, ${unique.length} unique, ${relevant.length} relevant (${unique.length - relevant.length} filtered out)`
   );
 
   // Cache results
-  if (unique.length > 0) {
-    cachedJobs = unique;
+  if (relevant.length > 0) {
+    cachedJobs = relevant;
     cacheTimestamp = Date.now();
   }
 
-  return unique;
+  return relevant;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
