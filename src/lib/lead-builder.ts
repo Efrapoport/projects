@@ -48,10 +48,11 @@ export function buildLeadsFromJobs(jobs: ScrapedJob[]): Lead[] {
       category: "job_posting" as const,
       source: job.source,
       title: `Hiring: ${job.title}`,
-      description: job.description || `${firstJob.company} posted a "${job.title}" role.`,
+      description: extractRelevantSnippets(job.description) || `${firstJob.company} posted a "${job.title}" role.`,
       detectedAt: job.detectedAt,
       weight: 20,
       raw: job.description,
+      url: job.url,
     }));
 
     // Score and build Lead
@@ -86,6 +87,51 @@ export function buildLeadsFromJobs(jobs: ScrapedJob[]): Lead[] {
 export function getIndustriesFromLeads(leads: Lead[]): string[] {
   const industries = new Set(leads.map((l) => l.company.industry));
   return Array.from(industries).sort();
+}
+
+// ── Snippet Extraction ──────────────────────────────────────────────
+// Instead of dumping the full job description, pull out only the most
+// relevant sentences (ones containing Salesforce-related keywords).
+
+const SNIPPET_KEYWORDS = [
+  "salesforce", "sfdc", "sales cloud", "service cloud", "apex",
+  "lightning", "soql", "visualforce", "flow builder", "crm",
+  "first", "greenfield", "build from scratch", "sole contributor",
+  "initial setup", "standing up", "net new", "transition from",
+  "migrating from", "founding", "owning",
+];
+
+function extractRelevantSnippets(description: string, maxSnippets = 3): string {
+  if (!description) return "";
+
+  // Split into sentences (approximate — handles ". ", "! ", "? ", and newlines)
+  const sentences = description
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 10);
+
+  const lower = (s: string) => s.toLowerCase();
+
+  // Score each sentence by how many keywords it contains
+  const scored = sentences.map((sentence) => {
+    const lc = lower(sentence);
+    const hits = SNIPPET_KEYWORDS.filter((kw) => lc.includes(kw)).length;
+    return { sentence, hits };
+  });
+
+  // Take the top sentences that have at least 1 keyword hit
+  const relevant = scored
+    .filter((s) => s.hits > 0)
+    .sort((a, b) => b.hits - a.hits)
+    .slice(0, maxSnippets)
+    .map((s) => s.sentence);
+
+  if (relevant.length === 0) {
+    // Fallback: first 2 sentences
+    return sentences.slice(0, 2).join(" ");
+  }
+
+  return relevant.join(" ... ");
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────

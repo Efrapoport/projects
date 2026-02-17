@@ -584,13 +584,29 @@ const QUALIFYING_PATTERNS = [
   /(?:sales\s+cloud|service\s+cloud|apex|lightning|soql|visualforce|flow\s+builder)/i,
 ];
 
+// Dedicated Salesforce role titles — these are what we want
+const DEDICATED_SF_TITLE = /\b(?:salesforce|sfdc)\s+(?:admin|administrator|developer|engineer|architect|consultant|specialist|analyst|manager|lead|coordinator)\b/i;
+
+// Roles where "Salesforce" appears in the title but the job is NOT a dedicated SF role.
+// e.g. "AWS Solutions Architect (Salesforce Integration)" or "Java Developer - Salesforce Team"
+const NON_SF_PRIMARY_TITLE = /\b(?:aws|azure|gcp|java|\.net|python|ruby|php|angular|react|node\.?js|devops|data\s+(?:engineer|scientist)|machine\s+learning|security|network|infrastructure|support\s+(?:engineer|specialist)|help\s+desk|desktop|hardware)\b/i;
+
 export function isSalesforcePrimaryRole(job: ScrapedJob): boolean {
   const title = job.title.toLowerCase();
   const desc = (job.description || "").toLowerCase();
 
-  // Title explicitly mentions Salesforce → clearly a SF role
+  // Title explicitly mentions Salesforce or SFDC
   if (title.includes("salesforce") || title.includes("sfdc")) {
-    return true;
+    // Check if it's a dedicated SF role title (e.g. "Salesforce Admin", "SFDC Developer")
+    if (DEDICATED_SF_TITLE.test(title)) {
+      return true;
+    }
+    // Title contains "Salesforce" but is actually a non-SF role → reject
+    // e.g. "AWS Solutions Architect (Salesforce Integration)"
+    if (NON_SF_PRIMARY_TITLE.test(title)) {
+      return false;
+    }
+    // Ambiguous title with "Salesforce" — fall through to description checks
   }
 
   const text = `${title} ${desc}`;
@@ -600,7 +616,7 @@ export function isSalesforcePrimaryRole(job: ScrapedJob): boolean {
     return false;
   }
 
-  // Salesforce is in the description but not the title.
+  // Salesforce is in the description but not a clear title match.
   // High bar: must have qualifying context AND no disqualifying context.
   const hasDisqualifying = DISQUALIFYING_PATTERNS.some((p) => p.test(desc));
   const qualifyingCount = QUALIFYING_PATTERNS.filter((p) => p.test(desc)).length;

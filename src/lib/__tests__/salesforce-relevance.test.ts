@@ -54,6 +54,14 @@ const SHOULD_PASS = [
       "Lead the Salesforce implementation for our organization. Configure custom objects, flows, and manage the Salesforce environment end-to-end."
     ),
   },
+  {
+    name: "Title: Salesforce Architect",
+    job: makeJob("Salesforce Architect", "Design and build Salesforce solutions."),
+  },
+  {
+    name: "Title: Salesforce Consultant",
+    job: makeJob("Salesforce Consultant", "Advise clients on Salesforce best practices."),
+  },
 ];
 
 const SHOULD_REJECT = [
@@ -153,6 +161,41 @@ const SHOULD_REJECT = [
     job: makeJob(
       "Data Engineer",
       "Build data pipelines with Spark and Airflow. Familiarity with Salesforce is a bonus."
+    ),
+  },
+  {
+    name: "AWS Architect with Salesforce in title",
+    job: makeJob(
+      "AWS Solutions Architect - Salesforce Integration",
+      "Design AWS cloud architecture. Integrate with Salesforce APIs."
+    ),
+  },
+  {
+    name: "Java Developer on Salesforce team",
+    job: makeJob(
+      "Java Developer - Salesforce Platform Team",
+      "Build microservices in Java Spring. Work with Salesforce integration layer."
+    ),
+  },
+  {
+    name: "DevOps Engineer with Salesforce mention",
+    job: makeJob(
+      "DevOps Engineer (Salesforce CI/CD)",
+      "Manage CI/CD pipelines for Salesforce deployments. Terraform, Jenkins, Docker."
+    ),
+  },
+  {
+    name: "Data Engineer with Salesforce data pipeline",
+    job: makeJob(
+      "Data Engineer - Salesforce Data Lake",
+      "Build ETL pipelines from Salesforce to Snowflake. Python, Spark required."
+    ),
+  },
+  {
+    name: "Python Developer with Salesforce API",
+    job: makeJob(
+      "Python Developer (Salesforce Integrations)",
+      "Build Python services that integrate with Salesforce REST APIs."
     ),
   },
 ];

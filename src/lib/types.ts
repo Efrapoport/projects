@@ -40,6 +40,7 @@ export interface Signal {
   detectedAt: string; // ISO date
   weight: number; // points contributed
   raw?: string; // raw snippet / JD excerpt
+  url?: string; // link to original job posting
 }
 
 export interface Company {

@@ -115,30 +115,33 @@ function SignalCard({ signal }: { signal: Signal }) {
             </span>
           </div>
           <p className="text-sm font-semibold mt-1">{signal.title}</p>
-          <p className="text-xs mt-1 opacity-80">{signal.description}</p>
+
+          {/* Relevant snippets (extracted, not the full JD) */}
+          <p className="text-xs mt-1 leading-relaxed opacity-80">
+            {highlightKeywords(signal.description)}
+          </p>
+
           <div className="flex items-center gap-1 mt-1.5 text-[10px] opacity-60">
             <Clock className="w-3 h-3" />
             {formatDate(signal.detectedAt)}
             <span className="mx-1">|</span>
-            <span className="capitalize">{signal.source}</span>
+            <span className="capitalize">{signal.source.replace(/_/g, " ")}</span>
           </div>
+
+          {/* Link to full job posting */}
+          {signal.url && (
+            <a
+              href={signal.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 mt-2 text-[11px] font-medium opacity-70 hover:opacity-100 transition-opacity"
+            >
+              <ExternalLink className="w-3 h-3" />
+              View full posting
+            </a>
+          )}
         </div>
       </div>
-
-      {/* Job Description Snippet */}
-      {signal.raw && (
-        <div className="mt-3 p-2.5 bg-white/50 rounded-md border border-current/10">
-          <div className="flex items-center gap-1 mb-1.5">
-            <AlertCircle className="w-3 h-3 opacity-60" />
-            <span className="text-[10px] font-semibold uppercase tracking-wider opacity-60">
-              Job Description Excerpt
-            </span>
-          </div>
-          <p className="text-xs leading-relaxed">
-            {highlightKeywords(signal.raw)}
-          </p>
-        </div>
-      )}
     </div>
   );
 }
