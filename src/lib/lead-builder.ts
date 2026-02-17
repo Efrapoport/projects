@@ -1,7 +1,7 @@
 import { Lead, Signal, Company, Contact } from "./types";
 import { computeLeadScore, generateTriggerEvent } from "./scoring";
 import { ScrapedJob } from "./scraper";
-import { batchValidateCompanyUrls, batchEnrichEmployeeCounts, batchLookupContacts, batchLinkedInEmployeeFallback, safeLinkedInUrl, safeCompanySearchUrl, extractEmployeeCountFromText, extractReportingManager } from "./data-integrity";
+import { batchValidateCompanyUrls, batchEnrichEmployeeCounts, batchLookupContacts, safeLinkedInUrl, safeCompanySearchUrl, extractEmployeeCountFromText, extractReportingManager } from "./data-integrity";
 import type { LookedUpContact } from "./data-integrity";
 import { createLogger } from "./logger";
 
@@ -39,11 +39,23 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
     ]);
     validationResults = urlResults;
     employeeCounts = empResults;
-    contactResults = contactRes;
+    contactResults = contactRes.contacts;
+
+    // Merge LinkedIn company page employee counts (side-channel from
+    // contact lookup — zero extra API calls) into the primary map.
+    let linkedInSideChannelFills = 0;
+    for (const [key, count] of contactRes.employeeCounts) {
+      if (count > 0 && !employeeCounts.get(key)) {
+        employeeCounts.set(key, count);
+        linkedInSideChannelFills++;
+      }
+    }
+
     log.info("Company enrichment complete", {
       urlValidated: validationResults.size,
       employeeEnriched: Array.from(empResults.values()).filter((v) => v > 0).length,
-      companiesWithContacts: Array.from(contactRes.values()).filter((v) => v.length > 0).length,
+      employeeFromLinkedIn: linkedInSideChannelFills,
+      companiesWithContacts: Array.from(contactRes.contacts.values()).filter((v) => v.length > 0).length,
     });
   } catch (error) {
     log.warn("Company enrichment failed — using safe fallbacks", { error: String(error) });
@@ -68,31 +80,6 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
   }
   if (jdEmployeeFills > 0) {
     log.info(`Employee count: filled ${jdEmployeeFills} from job descriptions`);
-  }
-
-  // ── Fallback 2: LinkedIn company page lookup ──────────────────────
-  // For companies still at 0 after SerpAPI + JD parsing, try searching
-  // Google for their LinkedIn company page which often shows employee ranges.
-  const stillMissing: Array<{ name: string }> = [];
-  for (const [key, name] of uniqueCompanies) {
-    if (!employeeCounts.get(key)) {
-      stillMissing.push({ name });
-    }
-  }
-
-  if (stillMissing.length > 0) {
-    log.info(`Employee count: ${stillMissing.length} companies still missing — trying LinkedIn fallback`);
-    const linkedInCounts = await batchLinkedInEmployeeFallback(stillMissing);
-    let linkedInFills = 0;
-    for (const [key, count] of linkedInCounts) {
-      if (count > 0) {
-        employeeCounts.set(key, count);
-        linkedInFills++;
-      }
-    }
-    if (linkedInFills > 0) {
-      log.info(`Employee count: filled ${linkedInFills} from LinkedIn company pages`);
-    }
   }
 
   // ── Fallback: extract "reports to" from job descriptions ──────────

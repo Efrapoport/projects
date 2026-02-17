@@ -327,7 +327,7 @@ export function extractEmployeeCountFromText(text: string): number {
     /(\d[\d,]*)\s*(?:\+\s*)?(?:staff|workers|people)/i,
     /employee[s]?\s*(?:count|size|number)?[:\s]+(\d[\d,]*)/i,   // "employees: 1,200"
     /(?:has|have|with|about|approximately|~|around)\s+(\d[\d,]*(?:\.\d+)?)\s*[Kk]?\s*(?:\+\s*)?employee/i,
-    /(\d[\d,]*)\s*-\s*(\d[\d,]*)\s*employee/i,                  // range: "200-500 employees"
+    /(\d[\d,]*)\s*[-–—]\s*(\d[\d,]*)\s*employee/i,               // range: "200-500" or "501–1,000 employees"
   ];
 
   for (const pattern of patterns) {
@@ -421,134 +421,11 @@ export async function batchEnrichEmployeeCounts(
   return results;
 }
 
-// ── LinkedIn Company Page Employee Count Fallback ────────────────────
-// When the generic SerpAPI query and JD parsing both fail to find an
-// employee count, we try `site:linkedin.com/company "CompanyName"`.
-// Google often indexes LinkedIn company pages with snippets like
-// "501-1,000 employees" or "3,296 employees on LinkedIn".
-
-/**
- * Look up employee count from a company's LinkedIn page via SerpAPI.
- * This is a targeted fallback — only called for companies where the
- * primary lookup and JD extraction both returned 0.
- */
-export async function lookupEmployeeCountLinkedIn(
-  companyName: string,
-  apiKey: string,
-): Promise<number> {
-  const cacheKey = `linkedin:${companyName.toLowerCase().trim()}`;
-  const cached = employeeCache.get(cacheKey);
-  if (cached && Date.now() - cached.checkedAt < EMPLOYEE_CACHE_TTL) {
-    return cached.count;
-  }
-
-  try {
-    const params = new URLSearchParams({
-      engine: "google",
-      q: `site:linkedin.com/company "${companyName}" employees`,
-      api_key: apiKey,
-      num: "5",
-    });
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-
-    const response = await fetch(
-      `https://serpapi.com/search.json?${params.toString()}`,
-      { signal: controller.signal, headers: { Accept: "application/json" } },
-    );
-
-    clearTimeout(timeout);
-
-    if (!response.ok) {
-      employeeCache.set(cacheKey, { count: 0, checkedAt: Date.now() });
-      return 0;
-    }
-
-    const data = (await response.json()) as Record<string, unknown>;
-    let count = 0;
-
-    // Parse snippets from organic results — LinkedIn pages show
-    // "501-1,000 employees" or "5,296 employees on LinkedIn"
-    const organic = (data.organic_results || []) as Record<string, unknown>[];
-    for (const result of organic.slice(0, 5)) {
-      const snippet = String(result.snippet || "");
-      const title = String(result.title || "");
-      const text = `${snippet} ${title}`;
-
-      // LinkedIn-specific range format: "501-1,000 employees"
-      const rangeMatch = text.match(
-        /([\d,]+)\s*[-–]\s*([\d,]+)\s*employee/i,
-      );
-      if (rangeMatch) {
-        count = parseNumericValue(rangeMatch[2]); // upper bound
-        break;
-      }
-
-      // Absolute count: "5,296 employees on LinkedIn"
-      count = extractEmployeeCountFromText(text);
-      if (count > 0) break;
-    }
-
-    employeeCache.set(cacheKey, { count, checkedAt: Date.now() });
-    return count;
-  } catch {
-    employeeCache.set(cacheKey, { count: 0, checkedAt: Date.now() });
-    return 0;
-  }
-}
-
-/**
- * Batch fallback: look up employee counts via LinkedIn company pages
- * for companies that still have 0 after primary enrichment + JD parsing.
- */
-export async function batchLinkedInEmployeeFallback(
-  companies: Array<{ name: string }>,
-  timeoutMs = 12000,
-): Promise<Map<string, number>> {
-  const apiKey = process.env.SERPAPI_KEY;
-  if (!apiKey) return new Map();
-
-  const timer = log.time("linkedin-employee-fallback");
-  const results = new Map<string, number>();
-  const CONCURRENCY = 3;
-
-  const timeoutPromise = new Promise<"timeout">((resolve) =>
-    setTimeout(() => resolve("timeout"), timeoutMs),
-  );
-
-  const enrichPromise = (async () => {
-    for (let i = 0; i < companies.length; i += CONCURRENCY) {
-      const batch = companies.slice(i, i + CONCURRENCY);
-      const batchResults = await Promise.allSettled(
-        batch.map((c) => lookupEmployeeCountLinkedIn(c.name, apiKey)),
-      );
-
-      batchResults.forEach((result, j) => {
-        const key = batch[j].name.toLowerCase().trim();
-        results.set(key, result.status === "fulfilled" ? result.value : 0);
-      });
-    }
-    return "done";
-  })();
-
-  const winner = await Promise.race([enrichPromise, timeoutPromise]);
-
-  if (winner === "timeout") {
-    log.warn("LinkedIn employee fallback timed out", {
-      enriched: results.size,
-      total: companies.length,
-    });
-  }
-
-  const found = Array.from(results.values()).filter((v) => v > 0).length;
-  timer.end("LinkedIn employee fallback", { total: companies.length, found });
-  return results;
-}
-
 // ── LinkedIn Contact Lookup via SerpAPI ──────────────────────────────
-// Searches Google for `site:linkedin.com/in "Company" (title keywords)`
+// Searches Google for `site:linkedin.com "Company" (title keywords)`
 // to find decision-makers who likely own Salesforce hiring decisions.
+// Also extracts employee counts from /company/ page snippets that
+// appear in the same result set — zero extra API calls.
 // Returns real LinkedIn profile URLs from Google's index.
 
 export interface LookedUpContact {
@@ -586,7 +463,7 @@ const CONTACT_SEARCH_KEYWORDS = [
   "VP sales",
 ];
 
-const contactCache = new Map<string, { contacts: LookedUpContact[]; checkedAt: number }>();
+const contactCache = new Map<string, { contacts: LookedUpContact[]; employeeCount: number; checkedAt: number }>();
 const CONTACT_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
 /**
@@ -642,20 +519,30 @@ function scoreContact(role: string, snippet: string): {
   return { score: 0, confidence: "low" };
 }
 
+export interface ContactLookupResult {
+  contacts: LookedUpContact[];
+  employeeCount: number; // side-channel: parsed from LinkedIn company page snippets
+}
+
 /**
  * Look up contacts for a single company via SerpAPI Google search.
+ * Also extracts employee count from LinkedIn company page snippets
+ * that appear in the same result set (zero extra API calls).
  * Returns up to 3 ranked contacts with real LinkedIn profile URLs.
  */
-async function lookupContacts(companyName: string, apiKey: string): Promise<LookedUpContact[]> {
+async function lookupContacts(companyName: string, apiKey: string): Promise<ContactLookupResult> {
   const cacheKey = companyName.toLowerCase().trim();
   const cached = contactCache.get(cacheKey);
   if (cached && Date.now() - cached.checkedAt < CONTACT_CACHE_TTL) {
-    return cached.contacts;
+    return { contacts: cached.contacts, employeeCount: cached.employeeCount };
   }
 
   try {
+    // Use site:linkedin.com (not /in) so we get BOTH profile pages AND
+    // company pages in one call. We extract contacts from /in/ URLs and
+    // employee counts from /company/ URL snippets — zero extra API cost.
     const titleQuery = CONTACT_SEARCH_KEYWORDS.map((t) => `"${t}"`).join(" OR ");
-    const query = `site:linkedin.com/in "${companyName}" (${titleQuery})`;
+    const query = `site:linkedin.com "${companyName}" (${titleQuery})`;
 
     const params = new URLSearchParams({
       engine: "google",
@@ -675,19 +562,32 @@ async function lookupContacts(companyName: string, apiKey: string): Promise<Look
     clearTimeout(timeout);
 
     if (!response.ok) {
-      contactCache.set(cacheKey, { contacts: [], checkedAt: Date.now() });
-      return [];
+      contactCache.set(cacheKey, { contacts: [], employeeCount: 0, checkedAt: Date.now() });
+      return { contacts: [], employeeCount: 0 };
     }
 
     const data = (await response.json()) as Record<string, unknown>;
     const results = ((data?.organic_results || []) as Record<string, unknown>[]);
 
     const scored: Array<LookedUpContact & { score: number }> = [];
+    let sideChannelEmployeeCount = 0;
 
     for (const item of results) {
       const link = String(item.link || "");
       const title = String(item.title || "");
       const snippet = String(item.snippet || "");
+
+      // Extract employee count from /company/ page snippets (free side-channel)
+      if (!sideChannelEmployeeCount && link.includes("linkedin.com/company/")) {
+        const text = `${snippet} ${title}`;
+        // LinkedIn range format: "501–1,000 employees"
+        const rangeMatch = text.match(/([\d,]+)\s*[-–—]\s*([\d,]+)\s*employee/i);
+        if (rangeMatch) {
+          sideChannelEmployeeCount = parseNumericValue(rangeMatch[2]);
+        } else {
+          sideChannelEmployeeCount = extractEmployeeCountFromText(text);
+        }
+      }
 
       // Only process real LinkedIn profile URLs (must be /in/ not /company/ or /jobs/)
       if (!link.includes("linkedin.com/in/")) continue;
@@ -715,7 +615,7 @@ async function lookupContacts(companyName: string, apiKey: string): Promise<Look
     if (scored.length === 0) {
       log.debug(`No contacts for "${companyName}" — retrying with broader search`);
 
-      const broaderQuery = `site:linkedin.com/in "${companyName}" (Director OR VP OR "Vice President" OR CTO OR CIO OR "Head of")`;
+      const broaderQuery = `site:linkedin.com "${companyName}" (Director OR VP OR "Vice President" OR CTO OR CIO OR "Head of")`;
       const broaderParams = new URLSearchParams({
         engine: "google",
         q: broaderQuery,
@@ -741,6 +641,17 @@ async function lookupContacts(companyName: string, apiKey: string): Promise<Look
             const link = String(item.link || "");
             const title = String(item.title || "");
             const snippet = String(item.snippet || "");
+
+            // Side-channel: extract employee count from /company/ pages
+            if (!sideChannelEmployeeCount && link.includes("linkedin.com/company/")) {
+              const text = `${snippet} ${title}`;
+              const rangeMatch = text.match(/([\d,]+)\s*[-–—]\s*([\d,]+)\s*employee/i);
+              if (rangeMatch) {
+                sideChannelEmployeeCount = parseNumericValue(rangeMatch[2]);
+              } else {
+                sideChannelEmployeeCount = extractEmployeeCountFromText(text);
+              }
+            }
 
             if (!link.includes("linkedin.com/in/")) continue;
 
@@ -770,18 +681,19 @@ async function lookupContacts(companyName: string, apiKey: string): Promise<Look
       .slice(0, 3)
       .map(({ score: _score, ...rest }) => rest);
 
-    contactCache.set(cacheKey, { contacts, checkedAt: Date.now() });
+    contactCache.set(cacheKey, { contacts, employeeCount: sideChannelEmployeeCount, checkedAt: Date.now() });
 
     log.debug(`Contact lookup: ${companyName}`, {
       googleResults: results.length,
       linkedinProfiles: scored.length,
       returned: contacts.length,
+      sideChannelEmployees: sideChannelEmployeeCount,
     });
 
-    return contacts;
+    return { contacts, employeeCount: sideChannelEmployeeCount };
   } catch {
-    contactCache.set(cacheKey, { contacts: [], checkedAt: Date.now() });
-    return [];
+    contactCache.set(cacheKey, { contacts: [], employeeCount: 0, checkedAt: Date.now() });
+    return { contacts: [], employeeCount: 0 };
   }
 }
 
@@ -842,18 +754,24 @@ export function extractReportingManager(description: string): ReportingManager |
  * Batch lookup contacts for a list of companies.
  * Returns a map of normalized company name → contacts.
  */
+export interface BatchContactResult {
+  contacts: Map<string, LookedUpContact[]>;
+  employeeCounts: Map<string, number>; // side-channel from LinkedIn company pages
+}
+
 export async function batchLookupContacts(
   companies: Array<{ name: string }>,
   timeoutMs = 20000
-): Promise<Map<string, LookedUpContact[]>> {
+): Promise<BatchContactResult> {
   const apiKey = process.env.SERPAPI_KEY;
   if (!apiKey) {
     log.debug("No SERPAPI_KEY — skipping contact lookup");
-    return new Map();
+    return { contacts: new Map(), employeeCounts: new Map() };
   }
 
   const timer = log.time("contact-lookup");
-  const results = new Map<string, LookedUpContact[]>();
+  const contacts = new Map<string, LookedUpContact[]>();
+  const employeeCounts = new Map<string, number>();
   const MAX_LOOKUPS = 15;
   const CONCURRENCY = 3;
 
@@ -878,7 +796,14 @@ export async function batchLookupContacts(
 
       batchResults.forEach((result, j) => {
         const key = batch[j][0];
-        results.set(key, result.status === "fulfilled" ? result.value : []);
+        if (result.status === "fulfilled") {
+          contacts.set(key, result.value.contacts);
+          if (result.value.employeeCount > 0) {
+            employeeCounts.set(key, result.value.employeeCount);
+          }
+        } else {
+          contacts.set(key, []);
+        }
       });
     }
     return "done";
@@ -888,17 +813,19 @@ export async function batchLookupContacts(
 
   if (winner === "timeout") {
     log.warn("Contact lookup timed out", {
-      completed: results.size,
+      completed: contacts.size,
       total: toLookup.length,
     });
   }
 
-  const withContacts = Array.from(results.values()).filter((v) => v.length > 0).length;
+  const withContacts = Array.from(contacts.values()).filter((v) => v.length > 0).length;
+  const withEmployees = Array.from(employeeCounts.values()).filter((v) => v > 0).length;
   timer.end("Contact lookup", {
     total: toLookup.length,
     withContacts,
-    totalContacts: Array.from(results.values()).reduce((s, v) => s + v.length, 0),
+    totalContacts: Array.from(contacts.values()).reduce((s, v) => s + v.length, 0),
+    sideChannelEmployees: withEmployees,
   });
 
-  return results;
+  return { contacts, employeeCounts };
 }
