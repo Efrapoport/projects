@@ -1,7 +1,7 @@
 import { Lead, Signal, Company, Contact } from "./types";
 import { computeLeadScore, generateTriggerEvent } from "./scoring";
 import { ScrapedJob } from "./scraper";
-import { batchValidateCompanyUrls, batchEnrichEmployeeCounts, batchLookupContacts, safeLinkedInUrl, safeCompanySearchUrl } from "./data-integrity";
+import { batchValidateCompanyUrls, batchEnrichEmployeeCounts, batchLookupContacts, safeLinkedInUrl, safeCompanySearchUrl, extractEmployeeCountFromText, extractReportingManager } from "./data-integrity";
 import type { LookedUpContact } from "./data-integrity";
 import { createLogger } from "./logger";
 
@@ -50,6 +50,43 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
     validationResults = new Map();
     employeeCounts = new Map();
     contactResults = new Map();
+  }
+
+  // ── Fallback: extract employee count from job descriptions ────────
+  // For companies where SerpAPI returned 0, try parsing the JD text itself.
+  // Catches phrases like "50-person startup", "team of 200", etc.
+  let jdEmployeeFills = 0;
+  for (const job of jobs) {
+    const key = job.company.toLowerCase().trim();
+    if (!employeeCounts.get(key)) {
+      const fromJd = extractEmployeeCountFromText(job.description);
+      if (fromJd > 0) {
+        employeeCounts.set(key, fromJd);
+        jdEmployeeFills++;
+      }
+    }
+  }
+  if (jdEmployeeFills > 0) {
+    log.info(`Employee count: filled ${jdEmployeeFills} from job descriptions`);
+  }
+
+  // ── Fallback: extract "reports to" from job descriptions ──────────
+  // For companies with no LinkedIn contacts, parse reporting hierarchy
+  // from the JD to create a synthetic contact (title only, no URL).
+  const reportingManagers = new Map<string, { title: string; confidence: "high" | "medium" | "low" }>();
+  for (const job of jobs) {
+    const key = job.company.toLowerCase().trim();
+    const existingContacts = contactResults.get(key);
+    if (existingContacts && existingContacts.length > 0) continue;
+    if (reportingManagers.has(key)) continue;
+
+    const manager = extractReportingManager(job.description);
+    if (manager) {
+      reportingManagers.set(key, manager);
+    }
+  }
+  if (reportingManagers.size > 0) {
+    log.info(`Reporting managers: extracted ${reportingManagers.size} from job descriptions`);
   }
 
   // Build one Lead per job posting (each job = its own row)
@@ -117,14 +154,7 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
       score,
       signals,
       triggerEvent,
-      contacts: (contactResults.get(companyKey) || []).map((c, ci) => ({
-        id: `${companyId}-c${ci + 1}`,
-        name: c.name,
-        title: c.title,
-        linkedinUrl: c.linkedinUrl,
-        source: "google" as const,
-        confidence: c.confidence,
-      })),
+      contacts: buildContacts(companyId, companyKey, contactResults, reportingManagers),
       firstDetected: detectedAt,
       lastUpdated: detectedAt,
       status: "new",
@@ -261,6 +291,40 @@ function slugify(name: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+function buildContacts(
+  companyId: string,
+  companyKey: string,
+  contactResults: Map<string, LookedUpContact[]>,
+  reportingManagers: Map<string, { title: string; confidence: "high" | "medium" | "low" }>,
+): Contact[] {
+  const linkedinContacts = (contactResults.get(companyKey) || []).map((c, ci) => ({
+    id: `${companyId}-c${ci + 1}`,
+    name: c.name,
+    title: c.title,
+    linkedinUrl: c.linkedinUrl,
+    source: "google" as const,
+    confidence: c.confidence,
+  }));
+
+  // If we found LinkedIn contacts, use those
+  if (linkedinContacts.length > 0) return linkedinContacts;
+
+  // Otherwise, fall back to reporting manager from JD
+  const manager = reportingManagers.get(companyKey);
+  if (manager) {
+    return [{
+      id: `${companyId}-c1`,
+      name: `${manager.title} (from job posting)`,
+      title: manager.title,
+      linkedinUrl: "",
+      source: "google" as const,
+      confidence: manager.confidence,
+    }];
+  }
+
+  return [];
 }
 
 function inferIndustry(jobs: ScrapedJob[]): string {

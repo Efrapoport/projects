@@ -287,21 +287,35 @@ export function SignalPanel({ lead, onClose }: SignalPanelProps) {
                         <Mail className="w-3.5 h-3.5" />
                       </a>
                     )}
-                    <a
-                      href={contact.linkedinUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
-                      title="View LinkedIn profile"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
+                    {contact.linkedinUrl ? (
+                      <a
+                        href={contact.linkedinUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
+                        title="View LinkedIn profile"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    ) : (
+                      <a
+                        href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(contact.title + " " + lead.company.name)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-1.5 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-md transition-colors"
+                        title="Search LinkedIn for this role"
+                      >
+                        <Search className="w-3.5 h-3.5" />
+                      </a>
+                    )}
                   </div>
                 </div>
               ))}
             </div>
             <p className="text-[10px] text-gray-400 mt-1.5 italic">
-              Suggested decision-makers via LinkedIn (indexed by Google)
+              {lead.contacts.some(c => !c.linkedinUrl)
+                ? "Decision-makers identified from job posting and LinkedIn"
+                : "Suggested decision-makers via LinkedIn (indexed by Google)"}
             </p>
           </div>
         )}
