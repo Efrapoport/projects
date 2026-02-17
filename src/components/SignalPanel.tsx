@@ -232,11 +232,11 @@ export function SignalPanel({ lead, onClose }: SignalPanelProps) {
           </div>
         </div>
 
-        {/* Direct Contacts */}
+        {/* Suggested Contacts */}
         {lead.contacts.length > 0 && (
           <div>
             <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-              Direct Contacts ({lead.contacts.length})
+              Suggested Contacts ({lead.contacts.length})
             </h3>
             <div className="space-y-2">
               {lead.contacts.map((contact) => (
@@ -245,7 +245,13 @@ export function SignalPanel({ lead, onClose }: SignalPanelProps) {
                   className="flex items-center justify-between p-2.5 border border-gray-200 rounded-lg bg-gray-50"
                 >
                   <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-gray-400 to-gray-500 flex items-center justify-center text-white text-xs font-bold">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold ${
+                      contact.confidence === "high"
+                        ? "bg-gradient-to-br from-green-500 to-emerald-600"
+                        : contact.confidence === "medium"
+                          ? "bg-gradient-to-br from-blue-400 to-blue-500"
+                          : "bg-gradient-to-br from-gray-400 to-gray-500"
+                    }`}>
                       {contact.name
                         .split(" ")
                         .map((n) => n[0])
@@ -255,7 +261,20 @@ export function SignalPanel({ lead, onClose }: SignalPanelProps) {
                       <p className="text-sm font-medium text-gray-900">
                         {contact.name}
                       </p>
-                      <p className="text-xs text-gray-500">{contact.title}</p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-xs text-gray-500">{contact.title}</p>
+                        {contact.confidence && (
+                          <span className={`text-[9px] px-1 py-0.5 rounded font-medium ${
+                            contact.confidence === "high"
+                              ? "bg-green-100 text-green-700"
+                              : contact.confidence === "medium"
+                                ? "bg-blue-100 text-blue-700"
+                                : "bg-gray-100 text-gray-500"
+                          }`}>
+                            {contact.confidence}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <div className="flex gap-1.5">
@@ -273,6 +292,7 @@ export function SignalPanel({ lead, onClose }: SignalPanelProps) {
                       target="_blank"
                       rel="noopener noreferrer"
                       className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
+                      title="View LinkedIn profile"
                     >
                       <ExternalLink className="w-3.5 h-3.5" />
                     </a>
@@ -281,7 +301,7 @@ export function SignalPanel({ lead, onClose }: SignalPanelProps) {
               ))}
             </div>
             <p className="text-[10px] text-gray-400 mt-1.5 italic">
-              Sourced from Apollo / Hunter.io / LinkedIn
+              Suggested decision-makers via LinkedIn (indexed by Google)
             </p>
           </div>
         )}

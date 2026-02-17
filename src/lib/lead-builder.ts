@@ -1,7 +1,8 @@
 import { Lead, Signal, Company, Contact } from "./types";
 import { computeLeadScore, generateTriggerEvent } from "./scoring";
 import { ScrapedJob } from "./scraper";
-import { batchValidateCompanyUrls, batchEnrichEmployeeCounts, safeLinkedInUrl, safeCompanySearchUrl } from "./data-integrity";
+import { batchValidateCompanyUrls, batchEnrichEmployeeCounts, batchLookupContacts, safeLinkedInUrl, safeCompanySearchUrl } from "./data-integrity";
+import type { LookedUpContact } from "./data-integrity";
 import { createLogger } from "./logger";
 
 const log = createLogger("lead-builder");
@@ -25,25 +26,30 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
     companyEntries.push({ name, slug: slugify(name) });
   }
 
-  // Validate URLs and enrich employee counts IN PARALLEL
+  // Validate URLs, enrich employee counts, and lookup contacts IN PARALLEL
   let validationResults: Map<string, { website: string; websiteVerified: boolean; linkedinUrl: string; domain: string; employeeCount: number }>;
   let employeeCounts: Map<string, number>;
+  let contactResults: Map<string, LookedUpContact[]>;
 
   try {
-    const [urlResults, empResults] = await Promise.all([
+    const [urlResults, empResults, contactRes] = await Promise.all([
       batchValidateCompanyUrls(companyEntries),
       batchEnrichEmployeeCounts(companyEntries),
+      batchLookupContacts(companyEntries),
     ]);
     validationResults = urlResults;
     employeeCounts = empResults;
+    contactResults = contactRes;
     log.info("Company enrichment complete", {
       urlValidated: validationResults.size,
       employeeEnriched: Array.from(empResults.values()).filter((v) => v > 0).length,
+      companiesWithContacts: Array.from(contactRes.values()).filter((v) => v.length > 0).length,
     });
   } catch (error) {
     log.warn("Company enrichment failed — using safe fallbacks", { error: String(error) });
     validationResults = new Map();
     employeeCounts = new Map();
+    contactResults = new Map();
   }
 
   // Build one Lead per job posting (each job = its own row)
@@ -111,7 +117,14 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
       score,
       signals,
       triggerEvent,
-      contacts: [],
+      contacts: (contactResults.get(companyKey) || []).map((c, ci) => ({
+        id: `${companyId}-c${ci + 1}`,
+        name: c.name,
+        title: c.title,
+        linkedinUrl: c.linkedinUrl,
+        source: "google" as const,
+        confidence: c.confidence,
+      })),
       firstDetected: detectedAt,
       lastUpdated: detectedAt,
       status: "new",

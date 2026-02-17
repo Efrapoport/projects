@@ -65,7 +65,8 @@ export interface Contact {
   title: string;
   email?: string;
   linkedinUrl: string;
-  source: "apollo" | "hunter" | "linkedin";
+  source: "apollo" | "hunter" | "linkedin" | "google";
+  confidence?: "high" | "medium" | "low";
 }
 
 export interface Lead {

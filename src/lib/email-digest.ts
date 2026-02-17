@@ -141,7 +141,7 @@ export function generateDigestHtml(leads: Lead[], date: Date): string {
           ${lead.contacts
             .map(
               (c) =>
-                `<div style="font-size: 12px; color: #374151;"><strong>${c.name}</strong> — ${c.title}${c.email ? ` (${c.email})` : ""}</div>`
+                `<div style="font-size: 12px; color: #374151;"><strong>${c.linkedinUrl ? `<a href="${c.linkedinUrl}" style="color: #2563eb; text-decoration: none;">${c.name}</a>` : c.name}</strong> — ${c.title}${c.email ? ` (${c.email})` : ""}</div>`
             )
             .join("")}
         </div>

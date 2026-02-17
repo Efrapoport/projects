@@ -420,3 +420,254 @@ export async function batchEnrichEmployeeCounts(
 
   return results;
 }
+
+// ── LinkedIn Contact Lookup via SerpAPI ──────────────────────────────
+// Searches Google for `site:linkedin.com/in "Company" (title keywords)`
+// to find decision-makers who likely own Salesforce hiring decisions.
+// Returns real LinkedIn profile URLs from Google's index.
+
+export interface LookedUpContact {
+  name: string;
+  title: string;
+  linkedinUrl: string;
+  confidence: "high" | "medium" | "low";
+}
+
+// Ranked by relevance: who owns the Salesforce hiring decision?
+const DECISION_MAKER_PATTERNS: Array<{ pattern: RegExp; weight: number }> = [
+  { pattern: /\b(VP|Vice President|Director|Head)\b.*\b(Revenue Ops|Revenue Operations|Sales Ops|Sales Operations)\b/i, weight: 10 },
+  { pattern: /\b(VP|Vice President|Director|Head)\b.*\b(Business Systems|IT|Information Technology)\b/i, weight: 9 },
+  { pattern: /\b(CTO|CIO|Chief Technology|Chief Information)\b/i, weight: 8 },
+  { pattern: /\bDirector\b.*\b(Salesforce|CRM|Sales Technology)\b/i, weight: 8 },
+  { pattern: /\b(VP|Vice President)\b.*\b(Sales|IT|Technology)\b/i, weight: 7 },
+  { pattern: /\bManager\b.*\b(Business Systems|Sales Operations|Revenue Operations)\b/i, weight: 6 },
+  { pattern: /\bSenior\s*(Manager|Director)\b.*\b(Salesforce|CRM|Business Systems)\b/i, weight: 6 },
+  { pattern: /\b(Head|Director|VP|Vice President)\b.*\b(Engineering|Operations|Digital)\b/i, weight: 5 },
+];
+
+// These are peers (current Salesforce admins/devs), not decision-makers
+const PEER_PATTERNS = [
+  /\bSalesforce\s*(Admin|Administrator|Developer|Engineer|Architect|Consultant)\b/i,
+  /\bCRM\s*(Admin|Administrator|Specialist)\b/i,
+];
+
+const CONTACT_SEARCH_KEYWORDS = [
+  "revenue operations",
+  "sales operations",
+  "salesforce",
+  "business systems",
+  "CRM",
+  "IT director",
+  "VP sales",
+];
+
+const contactCache = new Map<string, { contacts: LookedUpContact[]; checkedAt: number }>();
+const CONTACT_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+/**
+ * Parse LinkedIn search result title into name + role.
+ * Google titles: "Name - Title - Company | LinkedIn"
+ * Also: "Name – Title – Company | LinkedIn" (en-dash)
+ */
+function parseLinkedInResult(rawTitle: string, snippet: string, companyName: string): {
+  name: string;
+  role: string;
+  worksAtCompany: boolean;
+} {
+  // Split on dashes/pipes, filter out "LinkedIn" parts
+  const parts = rawTitle.split(/\s*[-–—|]\s*/);
+  const name = parts[0]?.trim() || "";
+  const role = parts.slice(1).filter((p) =>
+    !p.toLowerCase().includes("linkedin") && p.trim().length > 0
+  )[0]?.trim() || "";
+
+  // Verify this person actually works at the target company
+  const companyLower = companyName.toLowerCase();
+  const allText = `${rawTitle} ${snippet}`.toLowerCase();
+  const worksAtCompany = allText.includes(companyLower);
+
+  return { name, role, worksAtCompany };
+}
+
+/**
+ * Score a contact's relevance as a Salesforce hiring decision-maker.
+ */
+function scoreContact(role: string, snippet: string): {
+  score: number;
+  confidence: "high" | "medium" | "low";
+} {
+  // Check if they're a peer (current SF admin) — low value
+  for (const pattern of PEER_PATTERNS) {
+    if (pattern.test(role)) {
+      return { score: 1, confidence: "low" };
+    }
+  }
+
+  // Score against decision-maker patterns
+  const textToCheck = `${role} ${snippet}`;
+  for (const { pattern, weight } of DECISION_MAKER_PATTERNS) {
+    if (pattern.test(textToCheck)) {
+      return {
+        score: weight,
+        confidence: weight >= 8 ? "high" : weight >= 5 ? "medium" : "low",
+      };
+    }
+  }
+
+  return { score: 0, confidence: "low" };
+}
+
+/**
+ * Look up contacts for a single company via SerpAPI Google search.
+ * Returns up to 3 ranked contacts with real LinkedIn profile URLs.
+ */
+async function lookupContacts(companyName: string, apiKey: string): Promise<LookedUpContact[]> {
+  const cacheKey = companyName.toLowerCase().trim();
+  const cached = contactCache.get(cacheKey);
+  if (cached && Date.now() - cached.checkedAt < CONTACT_CACHE_TTL) {
+    return cached.contacts;
+  }
+
+  try {
+    const titleQuery = CONTACT_SEARCH_KEYWORDS.map((t) => `"${t}"`).join(" OR ");
+    const query = `site:linkedin.com/in "${companyName}" (${titleQuery})`;
+
+    const params = new URLSearchParams({
+      engine: "google",
+      q: query,
+      api_key: apiKey,
+      num: "10",
+    });
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch(`https://serpapi.com/search.json?${params.toString()}`, {
+      signal: controller.signal,
+      headers: { Accept: "application/json" },
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      contactCache.set(cacheKey, { contacts: [], checkedAt: Date.now() });
+      return [];
+    }
+
+    const data = (await response.json()) as Record<string, unknown>;
+    const results = ((data?.organic_results || []) as Record<string, unknown>[]);
+
+    const scored: Array<LookedUpContact & { score: number }> = [];
+
+    for (const item of results) {
+      const link = String(item.link || "");
+      const title = String(item.title || "");
+      const snippet = String(item.snippet || "");
+
+      // Only process real LinkedIn profile URLs (must be /in/ not /company/ or /jobs/)
+      if (!link.includes("linkedin.com/in/")) continue;
+
+      const { name, role, worksAtCompany } = parseLinkedInResult(title, snippet, companyName);
+
+      // Skip if no name, or person doesn't work at target company
+      if (!name || !worksAtCompany) continue;
+
+      const { score, confidence } = scoreContact(role, snippet);
+
+      // Only keep scored contacts (score > 0)
+      if (score > 0) {
+        scored.push({
+          name,
+          title: role,
+          linkedinUrl: link,
+          confidence,
+          score,
+        });
+      }
+    }
+
+    // Sort by score descending, take top 3
+    const contacts = scored
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3)
+      .map(({ score: _score, ...rest }) => rest);
+
+    contactCache.set(cacheKey, { contacts, checkedAt: Date.now() });
+
+    log.debug(`Contact lookup: ${companyName}`, {
+      googleResults: results.length,
+      linkedinProfiles: scored.length,
+      returned: contacts.length,
+    });
+
+    return contacts;
+  } catch {
+    contactCache.set(cacheKey, { contacts: [], checkedAt: Date.now() });
+    return [];
+  }
+}
+
+/**
+ * Batch lookup contacts for a list of companies.
+ * Returns a map of normalized company name → contacts.
+ */
+export async function batchLookupContacts(
+  companies: Array<{ name: string }>,
+  timeoutMs = 20000
+): Promise<Map<string, LookedUpContact[]>> {
+  const apiKey = process.env.SERPAPI_KEY;
+  if (!apiKey) {
+    log.debug("No SERPAPI_KEY — skipping contact lookup");
+    return new Map();
+  }
+
+  const timer = log.time("contact-lookup");
+  const results = new Map<string, LookedUpContact[]>();
+  const MAX_LOOKUPS = 15;
+  const CONCURRENCY = 3;
+
+  // Deduplicate
+  const unique = new Map<string, string>();
+  for (const c of companies) {
+    const key = c.name.toLowerCase().trim();
+    if (!unique.has(key)) unique.set(key, c.name);
+  }
+  const toLookup = Array.from(unique.entries()).slice(0, MAX_LOOKUPS);
+
+  const timeoutPromise = new Promise<"timeout">((resolve) =>
+    setTimeout(() => resolve("timeout"), timeoutMs)
+  );
+
+  const lookupPromise = (async () => {
+    for (let i = 0; i < toLookup.length; i += CONCURRENCY) {
+      const batch = toLookup.slice(i, i + CONCURRENCY);
+      const batchResults = await Promise.allSettled(
+        batch.map(([, name]) => lookupContacts(name, apiKey))
+      );
+
+      batchResults.forEach((result, j) => {
+        const key = batch[j][0];
+        results.set(key, result.status === "fulfilled" ? result.value : []);
+      });
+    }
+    return "done";
+  })();
+
+  const winner = await Promise.race([lookupPromise, timeoutPromise]);
+
+  if (winner === "timeout") {
+    log.warn("Contact lookup timed out", {
+      completed: results.size,
+      total: toLookup.length,
+    });
+  }
+
+  const withContacts = Array.from(results.values()).filter((v) => v.length > 0).length;
+  timer.end("Contact lookup", {
+    total: toLookup.length,
+    withContacts,
+    totalContacts: Array.from(results.values()).reduce((s, v) => s + v.length, 0),
+  });
+
+  return results;
+}
