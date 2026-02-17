@@ -50,10 +50,10 @@ const DATA_SOURCES = [
     notes: "LinkedIn, Indeed, Glassdoor, ZipRecruiter, Dice (requires SERPAPI_KEY)",
   },
   {
-    name: "EarnBetter (via SerpAPI)",
-    endpoint: "serpapi.com (query: salesforce earnbetter.com)",
-    type: "Aggregated API",
-    notes: "EarnBetter job listings via Google Jobs indexing",
+    name: "EarnBetter",
+    endpoint: "earnbetter.com/app/job/s/s-Salesforce+Administrator/",
+    type: "HTML scraping + SerpAPI",
+    notes: "3 strategies: direct SEO page scrape, Google site: search, Google Jobs filter",
   },
   {
     name: "Indeed",

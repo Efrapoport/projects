@@ -306,52 +306,180 @@ async function fetchGoogleJobs(): Promise<ScrapedJob[]> {
   return unique;
 }
 
-// ── Source 6: EarnBetter (via SerpAPI) ──────────────────────────────
-// EarnBetter.com blocks direct scraping (403). We fetch their listings
-// via SerpAPI Google Jobs, which indexes EarnBetter postings.
-// Also attempts direct HTML fetch as a bonus.
+// ── Source 6: EarnBetter ─────────────────────────────────────────────
+// EarnBetter.com has SEO-rendered search pages at known URL patterns:
+//   /app/job/s/s-Salesforce+Administrator/ws-remote/
+// We scrape those directly. If blocked, we fall back to SerpAPI Google
+// Web Search with site:earnbetter.com, which finds their indexed pages.
+// Job titles follow the pattern: "Job Title in City, State, ZIP | EarnBetter"
+
+const EARNBETTER_SEARCH_URLS = [
+  "https://earnbetter.com/app/job/s/s-Salesforce+Administrator/",
+  "https://earnbetter.com/app/job/s/s-Salesforce+Developer/",
+  "https://earnbetter.com/app/job/s/s-Salesforce+Administrator/ws-remote/",
+  "https://earnbetter.com/app/job/s/s-Salesforce+Architect/",
+  "https://earnbetter.com/app/job/s/s-Salesforce+Engineer/",
+];
 
 async function fetchEarnBetter(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
   const timer = log.time("earnbetter");
 
-  // Strategy 1: Try direct HTML fetch (EarnBetter may allow server-side)
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+  // ── Strategy 1: Scrape EarnBetter's SEO search pages directly ──────
+  // These pages are server-rendered (for Google indexing) and contain
+  // structured job listings even though the main site is an SPA.
+  for (const searchUrl of EARNBETTER_SEARCH_URLS) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
 
-    const response = await fetch("https://earnbetter.com/app/job/browse/?q=salesforce", {
-      signal: controller.signal,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    });
+      const response = await fetch(searchUrl, {
+        signal: controller.signal,
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+      });
 
-    clearTimeout(timeout);
+      clearTimeout(timeout);
 
-    if (response.ok) {
-      const html = await response.text();
-      const parsed = parseEarnBetterHTML(html);
-      jobs.push(...parsed);
-      log.info(`EarnBetter direct scrape succeeded`, { count: parsed.length });
-    } else {
-      log.debug(`EarnBetter direct fetch returned ${response.status}`);
+      if (response.ok) {
+        const html = await response.text();
+        const parsed = parseEarnBetterHTML(html);
+        if (parsed.length > 0) {
+          jobs.push(...parsed);
+          log.info(`EarnBetter direct scrape: ${searchUrl}`, { count: parsed.length });
+        }
+      } else {
+        log.debug(`EarnBetter ${response.status} for ${searchUrl}`);
+      }
+    } catch (error) {
+      log.debug(`EarnBetter direct fetch failed for ${searchUrl}`, { error: String(error) });
     }
-  } catch (error) {
-    log.debug("EarnBetter direct fetch failed (expected)", { error: String(error) });
+
+    // Small delay between requests to be polite
+    if (EARNBETTER_SEARCH_URLS.indexOf(searchUrl) < EARNBETTER_SEARCH_URLS.length - 1) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
   }
 
-  // Strategy 2: Via SerpAPI Google Jobs with earnbetter-specific queries
+  if (jobs.length > 0) {
+    // Dedup within EarnBetter results
+    const seen = new Set<string>();
+    const unique = jobs.filter((j) => {
+      const key = `${j.company.toLowerCase()}|${j.title.toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    timer.end("EarnBetter direct scrape", { raw: jobs.length, unique: unique.length });
+    return unique;
+  }
+
+  // ── Strategy 2: SerpAPI Google Web Search (site:earnbetter.com) ────
+  // Uses regular Google search to find EarnBetter job listing pages.
+  // This is reliable because Google indexes their SEO pages.
   const apiKey = process.env.SERPAPI_KEY;
+  if (apiKey) {
+    const queries = [
+      "site:earnbetter.com salesforce administrator",
+      "site:earnbetter.com salesforce developer",
+    ];
+
+    for (const query of queries) {
+      try {
+        const params = new URLSearchParams({
+          engine: "google",
+          q: query,
+          api_key: apiKey,
+          num: "20",
+        });
+
+        const data = (await fetchJSON(
+          `https://serpapi.com/search.json?${params.toString()}`,
+          20000
+        )) as Record<string, unknown>;
+
+        const results = (data?.organic_results || []) as Record<string, unknown>[];
+
+        for (const item of results) {
+          const link = String(item.link || "");
+          const snippetText = String(item.snippet || "");
+          const titleText = String(item.title || "");
+
+          // Only process individual job pages (ULID pattern: /app/job/01...)
+          if (!link.includes("earnbetter.com/app/job/") || link.includes("/s/") || link.includes("/browse")) {
+            continue;
+          }
+
+          // Parse title: "Salesforce Admin in Austin, TX, 78701 | EarnBetter"
+          const titleMatch = titleText.match(/^(.+?)\s+in\s+(.+?)\s*\|\s*EarnBetter/i);
+          const jobTitle = titleMatch ? titleMatch[1].trim() : titleText.replace(/\s*\|\s*EarnBetter.*/, "").trim();
+          const locationStr = titleMatch ? titleMatch[2].replace(/,?\s*\d{5}(-\d{4})?$/, "").trim() : "";
+
+          if (!jobTitle) continue;
+
+          // Try to extract company from snippet
+          // EarnBetter snippets often start with "Company Name - ..." or "Company Name is hiring..."
+          let company = "";
+          const companyMatch = snippetText.match(/^([A-Z][A-Za-z0-9\s&.,'()-]+?)\s*[-–—]\s/);
+          const hiringMatch = snippetText.match(/^([A-Z][A-Za-z0-9\s&.,'()-]+?)\s+is\s+(?:hiring|looking|seeking)/i);
+          if (companyMatch) {
+            company = companyMatch[1].trim();
+          } else if (hiringMatch) {
+            company = hiringMatch[1].trim();
+          }
+
+          // Skip if company name looks like a sentence or is too long
+          if (company.length > 60 || company.split(" ").length > 6) {
+            company = "";
+          }
+
+          jobs.push({
+            title: jobTitle,
+            company: company || "Unknown (via EarnBetter)",
+            location: locationStr,
+            description: stripHTML(snippetText).slice(0, 500),
+            url: link,
+            source: "earnbetter",
+            detectedAt: new Date().toISOString(),
+          });
+        }
+
+        log.info(`EarnBetter Google search "${query}"`, {
+          googleResults: results.length,
+          earnbetterJobs: jobs.length,
+        });
+      } catch (error) {
+        log.warn(`EarnBetter Google search failed: "${query}"`, { error: String(error) });
+      }
+    }
+
+    // Dedup
+    if (jobs.length > 0) {
+      const seen = new Set<string>();
+      const unique = jobs.filter((j) => {
+        const key = j.url || `${j.company.toLowerCase()}|${j.title.toLowerCase()}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      timer.end("EarnBetter via Google search", { raw: jobs.length, unique: unique.length });
+      return unique;
+    }
+  }
+
+  // ── Strategy 3: SerpAPI Google Jobs with EarnBetter filter ─────────
+  // Last resort: query Google Jobs and filter for "via EarnBetter"
   if (apiKey && jobs.length === 0) {
     try {
       const params = new URLSearchParams({
         engine: "google_jobs",
-        q: "salesforce administrator earnbetter",
+        q: "salesforce",
         api_key: apiKey,
+        chips: "date_posted:week",
       });
 
       const data = (await fetchJSON(
@@ -362,27 +490,31 @@ async function fetchEarnBetter(): Promise<ScrapedJob[]> {
       const results = (data?.jobs_results || []) as Record<string, unknown>[];
 
       for (const item of results) {
+        const via = String(item.via || "").toLowerCase();
+        // Only keep results sourced from EarnBetter
+        if (!via.includes("earnbetter")) continue;
+
         const company = String(item.company_name || "").trim();
         const title = String(item.title || "").trim();
-        const via = String(item.via || "").toLowerCase();
-
         if (!company || !title) continue;
-
-        // Only include results that are actually from EarnBetter
-        const isFromEarnBetter = via.includes("earnbetter") ||
-          String(item.description || "").toLowerCase().includes("earnbetter");
 
         let description = String(item.description || "");
         const highlights = item.job_highlights as Record<string, unknown>[] | undefined;
         if (highlights && Array.isArray(highlights)) {
-          const snippets = highlights
-            .flatMap((h) => (h.items as string[]) || [])
-            .join(" ");
+          const snippets = highlights.flatMap((h) => (h.items as string[]) || []).join(" ");
           if (snippets) description = description || snippets;
         }
 
         const applyOptions = (item.apply_options || []) as Record<string, unknown>[];
-        const applyLink = applyOptions[0]?.link ? String(applyOptions[0].link) : "";
+        const earnbetterLink = applyOptions.find((o) =>
+          String(o.title || "").toLowerCase().includes("earnbetter")
+        );
+        const applyLink = earnbetterLink
+          ? String(earnbetterLink.link)
+          : applyOptions[0]?.link
+            ? String(applyOptions[0].link)
+            : "";
+
         const extensions = (item.detected_extensions || {}) as Record<string, unknown>;
         const postedAt = extensions.posted_at ? String(extensions.posted_at) : "";
 
@@ -391,19 +523,22 @@ async function fetchEarnBetter(): Promise<ScrapedJob[]> {
           company,
           location: String(item.location || ""),
           description: stripHTML(description).slice(0, 1000),
-          url: applyLink || `https://earnbetter.com/app/job/browse/?q=${encodeURIComponent(title)}`,
-          source: isFromEarnBetter ? "earnbetter" : "google_jobs",
+          url: applyLink,
+          source: "earnbetter",
           detectedAt: postedAtToISO(postedAt),
         });
       }
 
-      log.info(`EarnBetter via SerpAPI`, { results: results.length, kept: jobs.length });
+      log.info("EarnBetter via Google Jobs filter", {
+        totalResults: results.length,
+        earnbetterResults: jobs.length,
+      });
     } catch (error) {
-      log.warn("EarnBetter SerpAPI query failed", { error: String(error) });
+      log.warn("EarnBetter Google Jobs fallback failed", { error: String(error) });
     }
   }
 
-  timer.end(`EarnBetter total`, { count: jobs.length });
+  timer.end("EarnBetter total", { count: jobs.length });
   return jobs;
 }
 
@@ -411,32 +546,32 @@ function parseEarnBetterHTML(html: string): ScrapedJob[] {
   const $ = cheerio.load(html);
   const jobs: ScrapedJob[] = [];
 
-  // Try to find job cards in the HTML
-  // EarnBetter is a React SPA, so HTML may contain JSON data or rendered cards
+  // Strategy A: Look for __NEXT_DATA__ or embedded JSON
   $("script").each((_, el) => {
     const content = $(el).html() || "";
-    // Look for embedded job data in __NEXT_DATA__ or similar
-    if (content.includes("__NEXT_DATA__") || content.includes("jobs")) {
+    if (content.includes("__NEXT_DATA__")) {
       try {
         const dataMatch = content.match(/__NEXT_DATA__\s*=\s*({[\s\S]+?})\s*;?\s*$/m);
         if (dataMatch) {
           const data = JSON.parse(dataMatch[1]);
           const pageProps = data?.props?.pageProps || {};
-          const jobList = pageProps.jobs || pageProps.results || [];
+          // Try multiple possible field names for job listings
+          const jobList = pageProps.jobs || pageProps.results || pageProps.listings ||
+            pageProps.searchResults || pageProps.data?.jobs || [];
 
-          for (const job of jobList) {
-            const title = String(job.title || job.jobTitle || "").trim();
-            const company = String(job.company || job.companyName || "").trim();
+          for (const job of (Array.isArray(jobList) ? jobList : [])) {
+            const title = String(job.title || job.jobTitle || job.name || "").trim();
+            const company = String(job.company || job.companyName || job.employer || job.organization || "").trim();
 
             if (title && company) {
               jobs.push({
                 title,
                 company,
-                location: String(job.location || ""),
-                description: stripHTML(String(job.description || job.snippet || "")),
-                url: job.url || job.applyUrl || "",
+                location: String(job.location || job.city || ""),
+                description: stripHTML(String(job.description || job.snippet || job.summary || "")),
+                url: job.url || job.applyUrl || job.link || "",
                 source: "earnbetter",
-                detectedAt: String(job.postedAt || job.createdAt || new Date().toISOString()),
+                detectedAt: String(job.postedAt || job.createdAt || job.datePosted || new Date().toISOString()),
               });
             }
           }
@@ -447,26 +582,94 @@ function parseEarnBetterHTML(html: string): ScrapedJob[] {
     }
   });
 
-  // Also try standard card selectors
-  if (jobs.length === 0) {
-    $('[class*="job"], [class*="Job"], [data-testid*="job"]').each((_, el) => {
-      const $el = $(el);
-      const title = $el.find("h2, h3, [class*='title']").first().text().trim();
-      const company = $el.find("[class*='company']").first().text().trim();
+  if (jobs.length > 0) return jobs;
 
-      if (title && company) {
-        jobs.push({
-          title,
-          company,
-          location: $el.find("[class*='location']").first().text().trim(),
-          description: $el.find("[class*='description'], [class*='snippet']").first().text().trim(),
-          url: $el.find("a").first().attr("href") || "",
-          source: "earnbetter",
-          detectedAt: new Date().toISOString(),
-        });
+  // Strategy B: Parse structured data (JSON-LD)
+  $('script[type="application/ld+json"]').each((_, el) => {
+    try {
+      const raw = $(el).html() || "";
+      const data = JSON.parse(raw);
+      const items = Array.isArray(data) ? data : [data];
+
+      for (const item of items) {
+        if (item["@type"] === "JobPosting") {
+          const org = item.hiringOrganization || {};
+          const loc = item.jobLocation?.address || {};
+          const title = String(item.title || "").trim();
+          const company = String(org.name || "").trim();
+
+          if (title) {
+            jobs.push({
+              title,
+              company: company || "Unknown (via EarnBetter)",
+              location: [loc.addressLocality, loc.addressRegion].filter(Boolean).join(", "),
+              description: stripHTML(String(item.description || "")),
+              url: String(item.url || ""),
+              source: "earnbetter",
+              detectedAt: String(item.datePosted || new Date().toISOString()),
+            });
+          }
+        }
+
+        // Handle ItemList of JobPostings
+        if (item["@type"] === "ItemList" && item.itemListElement) {
+          for (const entry of item.itemListElement) {
+            const posting = entry.item || entry;
+            if (posting["@type"] === "JobPosting") {
+              const org = posting.hiringOrganization || {};
+              const title = String(posting.title || "").trim();
+              if (title) {
+                jobs.push({
+                  title,
+                  company: String(org.name || "Unknown (via EarnBetter)"),
+                  location: "",
+                  description: stripHTML(String(posting.description || "")),
+                  url: String(posting.url || ""),
+                  source: "earnbetter",
+                  detectedAt: String(posting.datePosted || new Date().toISOString()),
+                });
+              }
+            }
+          }
+        }
       }
-    });
-  }
+    } catch {
+      // JSON-LD parsing failed
+    }
+  });
+
+  if (jobs.length > 0) return jobs;
+
+  // Strategy C: Parse visible DOM elements (job cards / links)
+  // EarnBetter job links follow pattern: /app/job/{ULID}/
+  const jobLinkPattern = /\/app\/job\/([A-Z0-9]{26})\//;
+  $("a[href]").each((_, el) => {
+    const href = $(el).attr("href") || "";
+    if (!jobLinkPattern.test(href)) return;
+
+    const $el = $(el);
+    // Get the closest container that holds job info
+    const $card = $el.closest("[class*='job'], [class*='Job'], [class*='card'], [class*='Card'], li, article, div").first();
+    const container = $card.length ? $card : $el;
+
+    const title = container.find("h2, h3, [class*='title'], [class*='Title']").first().text().trim()
+      || $el.text().trim();
+    const company = container.find("[class*='company'], [class*='Company'], [class*='employer']").first().text().trim();
+    const location = container.find("[class*='location'], [class*='Location'], [class*='city']").first().text().trim();
+
+    if (title && title.length > 3) {
+      const fullUrl = href.startsWith("http") ? href : `https://earnbetter.com${href}`;
+      jobs.push({
+        title,
+        company: company || "Unknown (via EarnBetter)",
+        location,
+        description: container.find("[class*='description'], [class*='snippet']").first().text().trim(),
+        url: fullUrl,
+        source: "earnbetter",
+        detectedAt: new Date().toISOString(),
+      });
+    }
+  });
 
   return jobs;
 }
