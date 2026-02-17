@@ -102,7 +102,7 @@ console.log(`Input: ${realisticJobs.length} scraped jobs from ${new Set(realisti
 
 // Step 1: Build leads
 const leads = await buildLeadsFromJobs(realisticJobs);
-console.log(`Step 1 — buildLeadsFromJobs: ${leads.length} leads (deduplicated by company)\n`);
+console.log(`Step 1 — buildLeadsFromJobs: ${leads.length} leads (one per job posting)\n`);
 
 // Step 2: Show each lead
 for (const lead of leads) {

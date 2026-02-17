@@ -11,20 +11,17 @@ const log = createLogger("lead-builder");
 export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
   const timer = log.time("build-leads");
 
-  // Group jobs by company name (normalized)
-  const companyGroups = new Map<string, ScrapedJob[]>();
-
+  // Collect unique company names for batch URL validation
+  const uniqueCompanies = new Map<string, string>(); // normalized key → original name
   for (const job of jobs) {
     const key = job.company.toLowerCase().trim();
-    const existing = companyGroups.get(key) || [];
-    existing.push(job);
-    companyGroups.set(key, existing);
+    if (!uniqueCompanies.has(key)) {
+      uniqueCompanies.set(key, job.company);
+    }
   }
 
-  // Collect company slugs for batch URL validation
   const companyEntries: Array<{ name: string; slug: string }> = [];
-  for (const [, companyJobs] of companyGroups) {
-    const name = companyJobs[0].company;
+  for (const [, name] of uniqueCompanies) {
     companyEntries.push({ name, slug: slugify(name) });
   }
 
@@ -38,31 +35,29 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
     validationResults = new Map();
   }
 
-  // Build a Lead for each company
+  // Build one Lead per job posting (each job = its own row)
   const leads: Lead[] = [];
 
-  let companyIndex = 0;
-  for (const [, companyJobs] of companyGroups) {
-    companyIndex++;
-    const firstJob = companyJobs[0];
+  for (let i = 0; i < jobs.length; i++) {
+    const job = jobs[i];
 
     // Parse location
-    const { city, state } = parseLocation(firstJob.location);
+    const { city, state } = parseLocation(job.location);
 
     // Get validated URLs (or safe fallbacks)
-    const companyKey = firstJob.company.toLowerCase().trim();
-    const slug = slugify(firstJob.company);
+    const companyKey = job.company.toLowerCase().trim();
+    const slug = slugify(job.company);
     const validation = validationResults.get(companyKey);
 
     // Build Company with validated URLs
-    const companyId = `scraped-${companyIndex}`;
+    const companyId = `scraped-${i + 1}`;
     const company: Company = {
       id: companyId,
-      name: firstJob.company,
+      name: job.company,
       domain: validation?.domain || "",
-      linkedinUrl: validation?.linkedinUrl || safeLinkedInUrl(firstJob.company),
-      website: validation?.website || safeCompanySearchUrl(firstJob.company),
-      industry: inferIndustry(companyJobs),
+      linkedinUrl: validation?.linkedinUrl || safeLinkedInUrl(job.company),
+      website: validation?.website || safeCompanySearchUrl(job.company),
+      industry: inferIndustry([job]),
       employeeCount: 0, // Unknown — filters will handle this
       city,
       state,
@@ -70,37 +65,34 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
       websiteVerified: validation?.websiteVerified || false,
     };
 
-    log.debug(`Built company: ${company.name}`, {
+    log.debug(`Built lead: ${company.name} — ${job.title}`, {
       website: company.website,
       verified: company.websiteVerified,
       slug,
     });
 
-    // Build Signals (one per job posting)
-    const signals: Signal[] = companyJobs.map((job, i) => ({
-      id: `${companyId}-s${i + 1}`,
+    // Single signal for this job posting
+    const signal: Signal = {
+      id: `${companyId}-s1`,
       category: "job_posting" as const,
       source: job.source,
       title: `Hiring: ${job.title}`,
-      description: extractRelevantSnippets(job.description) || `${firstJob.company} posted a "${job.title}" role.`,
+      description: extractRelevantSnippets(job.description) || `${job.company} posted a "${job.title}" role.`,
       detectedAt: job.detectedAt,
       weight: 20,
       raw: job.description,
       url: job.url,
-    }));
+    };
+
+    const signals = [signal];
 
     // Score and build Lead
     const score = computeLeadScore(signals);
     const triggerEvent = generateTriggerEvent(signals);
 
-    const dates = signals
-      .map((s) => new Date(s.detectedAt).getTime())
-      .filter((t) => Number.isFinite(t));
+    const detectedTime = new Date(job.detectedAt).getTime();
     const now = new Date().toISOString();
-    const firstDetected = dates.length > 0 ? new Date(Math.min(...dates)).toISOString() : now;
-    const lastUpdated = dates.length > 0 ? new Date(Math.max(...dates)).toISOString() : now;
-
-    const contacts: Contact[] = [];
+    const detectedAt = Number.isFinite(detectedTime) ? job.detectedAt : now;
 
     leads.push({
       id: `lead-${companyId}`,
@@ -108,9 +100,9 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
       score,
       signals,
       triggerEvent,
-      contacts,
-      firstDetected,
-      lastUpdated,
+      contacts: [],
+      firstDetected: detectedAt,
+      lastUpdated: detectedAt,
       status: "new",
     });
   }
