@@ -1,8 +1,6 @@
 import { Dashboard } from "@/components/Dashboard";
 import { scrapeJobs } from "@/lib/scraper";
 import { buildLeadsFromJobs, getIndustriesFromLeads } from "@/lib/lead-builder";
-import { applyFilters } from "@/lib/filters";
-import { DEFAULT_FILTERS } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -20,10 +18,10 @@ export default async function Home() {
     if (jobs.length > 0) {
       const allLeads = await buildLeadsFromJobs(jobs);
       const industries = getIndustriesFromLeads(allLeads);
-      const filtered = applyFilters(allLeads, DEFAULT_FILTERS);
 
       // Strip signal.raw (full JD) — client only needs the extracted snippets
-      const leadsForClient = filtered.map((lead) => ({
+      // Send ALL leads — client handles filtering for instant filter response
+      const leadsForClient = allLeads.map((lead) => ({
         ...lead,
         signals: lead.signals.map(({ raw, ...rest }) => rest),
       }));
@@ -31,7 +29,6 @@ export default async function Home() {
       initialData = {
         leads: leadsForClient,
         total: allLeads.length,
-        filtered: leadsForClient.length,
         industries,
         dataSource: "live" as const,
       };

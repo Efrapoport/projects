@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { Lead, Filters, DEFAULT_FILTERS } from "@/lib/types";
+import { applyFilters } from "@/lib/filters";
 import { FilterBar } from "./FilterBar";
 import { LeadTable } from "./LeadTable";
 import { SignalPanel } from "./SignalPanel";
@@ -11,7 +12,6 @@ import { RefreshCw, Cloud, Mail, AlertTriangle, Loader2 } from "lucide-react";
 interface ApiResponse {
   leads: Lead[];
   total: number;
-  filtered: number;
   industries: string[];
   dataSource?: "live" | "bundled" | "demo";
 }
@@ -24,29 +24,26 @@ export function Dashboard({ initialData }: DashboardProps) {
   const hasInitial = !!(initialData?.leads?.length);
 
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
-  const [leads, setLeads] = useState<Lead[]>(hasInitial ? initialData.leads : []);
+  // allLeads stores the FULL unfiltered dataset; filters are applied client-side
+  const [allLeads, setAllLeads] = useState<Lead[]>(hasInitial ? initialData.leads : []);
   const [industries, setIndustries] = useState<string[]>(hasInitial ? initialData.industries : []);
-  const [totalLeads, setTotalLeads] = useState(hasInitial ? initialData.total : 0);
-  const [filteredCount, setFilteredCount] = useState(hasInitial ? initialData.filtered : 0);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(!hasInitial); // start loading if no initial data
+  const [loading, setLoading] = useState(!hasInitial);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(hasInitial ? new Date() : null);
   const [dataSource, setDataSource] = useState<string>(initialData?.dataSource || "");
   const [error, setError] = useState<string | null>(null);
+
+  // Client-side filtering — instant response when user changes timeframe/filters
+  const filteredLeads = useMemo(
+    () => applyFilters(allLeads, filters),
+    [allLeads, filters]
+  );
 
   const fetchLeads = useCallback(async (refresh = false) => {
     setLoading(true);
     setError(null);
 
     const params = new URLSearchParams();
-    params.set("timeframe", filters.timeframe);
-    params.set("companySizeMin", String(filters.companySizeMin));
-    params.set("companySizeMax", String(filters.companySizeMax));
-    if (filters.industries.length)
-      params.set("industries", filters.industries.join(","));
-    if (filters.minScore) params.set("minScore", String(filters.minScore));
-    if (filters.sources.length)
-      params.set("sources", filters.sources.join(","));
     if (refresh) params.set("refresh", "true");
     params.set("_t", String(Date.now()));
 
@@ -56,15 +53,13 @@ export function Dashboard({ initialData }: DashboardProps) {
         throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
       }
       const data: ApiResponse = await res.json();
-      setLeads(data.leads);
-      setTotalLeads(data.total);
-      setFilteredCount(data.filtered);
+      setAllLeads(data.leads);
       setIndustries(data.industries);
       setDataSource(data.dataSource || "unknown");
       setLastRefreshed(new Date());
 
       if (data.leads.length === 0) {
-        setError("No leads found. The scrapers returned 0 results for current filters.");
+        setError("No leads found. The scrapers returned 0 results.");
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
@@ -72,27 +67,21 @@ export function Dashboard({ initialData }: DashboardProps) {
     } finally {
       setLoading(false);
     }
-  }, [filters]);
+  }, []);
 
-  // Fetch on mount if no server-provided data, and on every filter change after that
-  const filtersKey = JSON.stringify(filters);
-  const isInitialMount = useState(true);
-  useEffect(() => {
-    if (isInitialMount[0]) {
-      isInitialMount[0] = false;
-      // If we already have server data, don't re-fetch on initial mount
-      if (hasInitial) return;
+  // Fetch on mount only if no server-provided data
+  useState(() => {
+    if (!hasInitial) {
+      fetchLeads();
     }
-    fetchLeads();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtersKey]);
+  });
 
   const selectedLead = selectedLeadId
-    ? leads.find((l) => l.id === selectedLeadId) || null
+    ? filteredLeads.find((l) => l.id === selectedLeadId) || null
     : null;
 
   // ── Loading state ──────────────────────────────────────────────────
-  if (loading && leads.length === 0) {
+  if (loading && allLeads.length === 0) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
@@ -104,7 +93,7 @@ export function Dashboard({ initialData }: DashboardProps) {
   }
 
   // ── Error state (no data at all) ──────────────────────────────────
-  if (!loading && leads.length === 0 && error) {
+  if (!loading && allLeads.length === 0 && error) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="bg-white rounded-lg shadow-sm border border-red-200 p-8 max-w-lg text-center">
@@ -195,7 +184,7 @@ export function Dashboard({ initialData }: DashboardProps) {
       <main className="max-w-[1600px] mx-auto px-4 py-4">
         <div className="space-y-4">
           {/* Error Banner (non-fatal — we still have leads showing) */}
-          {error && leads.length > 0 && (
+          {error && allLeads.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 flex items-center justify-between">
               <span className="text-sm text-amber-700">{error}</span>
               <button
@@ -208,15 +197,15 @@ export function Dashboard({ initialData }: DashboardProps) {
           )}
 
           {/* Stats */}
-          <StatsBar leads={leads} />
+          <StatsBar leads={filteredLeads} />
 
           {/* Filters */}
           <FilterBar
             filters={filters}
             onChange={setFilters}
             industries={industries}
-            totalLeads={totalLeads}
-            filteredLeads={filteredCount}
+            totalLeads={allLeads.length}
+            filteredLeads={filteredLeads.length}
           />
 
           {/* Content Area */}
@@ -224,7 +213,7 @@ export function Dashboard({ initialData }: DashboardProps) {
             {/* Lead Table */}
             <div className={selectedLead ? "flex-1 min-w-0" : "w-full"}>
               <LeadTable
-                leads={leads}
+                leads={filteredLeads}
                 selectedLeadId={selectedLeadId}
                 onSelectLead={(id) =>
                   setSelectedLeadId(id === selectedLeadId ? null : id)

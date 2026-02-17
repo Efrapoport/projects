@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { scrapeJobs } from "@/lib/scraper";
 import { buildLeadsFromJobs, getIndustriesFromLeads } from "@/lib/lead-builder";
-import { applyFilters } from "@/lib/filters";
-import { Filters, DEFAULT_FILTERS, Timeframe, SignalSource } from "@/lib/types";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("api/leads");
@@ -12,32 +10,9 @@ export async function GET(request: NextRequest) {
 
   try {
     const { searchParams } = request.nextUrl;
-
-    const timeframe = (searchParams.get("timeframe") as Timeframe) || DEFAULT_FILTERS.timeframe;
-    const companySizeMin = parseInt(searchParams.get("companySizeMin") || String(DEFAULT_FILTERS.companySizeMin), 10);
-    const companySizeMax = parseInt(searchParams.get("companySizeMax") || String(DEFAULT_FILTERS.companySizeMax), 10);
-    const industriesParam = searchParams.get("industries");
-    const industries = industriesParam ? industriesParam.split(",") : [];
-    const minScore = parseInt(searchParams.get("minScore") || "0", 10);
-    const sourcesParam = searchParams.get("sources");
-    const sources = sourcesParam ? (sourcesParam.split(",") as SignalSource[]) : [];
     const forceRefresh = searchParams.get("refresh") === "true";
 
-    const filters: Filters = {
-      timeframe,
-      companySizeMin,
-      companySizeMax,
-      industries,
-      minScore,
-      sources,
-    };
-
-    log.info("Request received", {
-      timeframe,
-      forceRefresh,
-      industries: industries.length > 0 ? industries : undefined,
-      minScore: minScore > 0 ? minScore : undefined,
-    });
+    log.info("Request received", { forceRefresh });
 
     // scrapeJobs() tries live APIs first, falls back to bundled real data
     let scrapedJobs: Awaited<ReturnType<typeof scrapeJobs>> = [];
@@ -71,10 +46,9 @@ export async function GET(request: NextRequest) {
       dataSource = hasBundledOnly ? "live" : "bundled";
     }
 
-    const filtered = applyFilters(allLeads, filters);
-
     // Strip signal.raw (full JD) from response — client only needs the extracted snippets
-    const leadsForClient = filtered.map((lead) => ({
+    // Return ALL leads unfiltered — client handles filtering for instant UI response
+    const leadsForClient = allLeads.map((lead) => ({
       ...lead,
       signals: lead.signals.map(({ raw, ...rest }) => rest),
     }));
@@ -87,7 +61,6 @@ export async function GET(request: NextRequest) {
 
     requestTimer.end("Response ready", {
       total: allLeads.length,
-      filtered: filtered.length,
       dataSource,
       sourceBreakdown,
     });
@@ -96,7 +69,6 @@ export async function GET(request: NextRequest) {
       {
         leads: leadsForClient,
         total: allLeads.length,
-        filtered: filtered.length,
         industries: availableIndustries,
         dataSource,
         sourceBreakdown,
@@ -116,7 +88,6 @@ export async function GET(request: NextRequest) {
       {
         leads: [],
         total: 0,
-        filtered: 0,
         industries: [],
         dataSource: "error",
         error: String(err),
