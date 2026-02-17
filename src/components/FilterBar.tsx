@@ -86,7 +86,7 @@ export function FilterBar({
               onChange={(e) =>
                 onChange({
                   ...filters,
-                  companySizeMax: parseInt(e.target.value) || 10000,
+                  companySizeMax: parseInt(e.target.value) || 100000,
                 })
               }
               className="w-20 px-2 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -147,7 +147,7 @@ export function FilterBar({
             onChange({
               timeframe: "30d",
               companySizeMin: 0,
-              companySizeMax: 10000,
+              companySizeMax: 100000,
               industries: [],
               minScore: 0,
               sources: [],

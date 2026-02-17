@@ -97,7 +97,7 @@ export interface Filters {
 export const DEFAULT_FILTERS: Filters = {
   timeframe: "30d",
   companySizeMin: 0,
-  companySizeMax: 10000,
+  companySizeMax: 100000,
   industries: [],
   minScore: 0,
   sources: [],
