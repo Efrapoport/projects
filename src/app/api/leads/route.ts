@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { scrapeJobs } from "@/lib/scraper";
 import { buildLeadsFromJobs, getIndustriesFromLeads } from "@/lib/lead-builder";
-import { getAllLeads, getAvailableIndustries } from "@/lib/sample-data";
 import { applyFilters } from "@/lib/filters";
 import { Filters, DEFAULT_FILTERS, Timeframe, SignalSource } from "@/lib/types";
 
@@ -28,34 +27,35 @@ export async function GET(request: NextRequest) {
       sources,
     };
 
-    let allLeads;
-    let availableIndustries;
-    let dataSource: "live" | "demo";
-
-    // Try scraping real data first, with a safety timeout
+    // scrapeJobs() tries live APIs first, falls back to bundled real data
     let scrapedJobs: Awaited<ReturnType<typeof scrapeJobs>> = [];
+    let dataSource: "live" | "bundled" = "live";
+
     try {
       scrapedJobs = await Promise.race([
         scrapeJobs(forceRefresh),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Scraper timeout")), 20000)
+          setTimeout(() => reject(new Error("Scraper timeout after 20s")), 20000)
         ),
       ]);
     } catch (err) {
-      console.warn("[api/leads] Scraper failed or timed out, falling back to sample data:", err);
+      console.warn("[api/leads] Scraper failed or timed out:", err);
     }
 
+    // Build leads from whatever we got
+    const allLeads = scrapedJobs.length > 0 ? buildLeadsFromJobs(scrapedJobs) : [];
+    const availableIndustries = getIndustriesFromLeads(allLeads);
+
+    // Detect if data came from bundled fallback (scraper logs this)
     if (scrapedJobs.length > 0) {
-      allLeads = buildLeadsFromJobs(scrapedJobs);
-      availableIndustries = getIndustriesFromLeads(allLeads);
-      dataSource = "live";
-      console.log(`[api/leads] Serving ${allLeads.length} live leads from ${scrapedJobs.length} scraped jobs`);
-    } else {
-      allLeads = getAllLeads();
-      availableIndustries = getAvailableIndustries();
-      dataSource = "demo";
-      console.log(`[api/leads] Serving ${allLeads.length} sample leads (demo mode)`);
+      // Check if any job has a bundled source indicator
+      const hasBundledOnly = scrapedJobs.every(
+        (j) => !["remoteok", "arbeitnow", "jobicy", "himalayas", "indeed"].includes(j.source) === false
+      );
+      dataSource = hasBundledOnly ? "live" : "bundled";
     }
+
+    console.log(`[api/leads] Serving ${allLeads.length} leads (${dataSource}) from ${scrapedJobs.length} scraped jobs`);
 
     const filtered = applyFilters(allLeads, filters);
 
@@ -76,20 +76,17 @@ export async function GET(request: NextRequest) {
     );
   } catch (err) {
     console.error("[api/leads] Unhandled error:", err);
-    // Last-resort fallback: return sample data even if something unexpected broke
-    const allLeads = getAllLeads();
-    const filtered = applyFilters(allLeads, {
-      ...DEFAULT_FILTERS,
-    });
     return NextResponse.json(
       {
-        leads: filtered,
-        total: allLeads.length,
-        filtered: filtered.length,
-        industries: getAvailableIndustries(),
-        dataSource: "demo" as const,
+        leads: [],
+        total: 0,
+        filtered: 0,
+        industries: [],
+        dataSource: "error",
+        error: String(err),
       },
       {
+        status: 500,
         headers: {
           "Cache-Control": "no-store, no-cache, must-revalidate",
           Pragma: "no-cache",

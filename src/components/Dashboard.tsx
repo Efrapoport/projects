@@ -6,49 +6,38 @@ import { FilterBar } from "./FilterBar";
 import { LeadTable } from "./LeadTable";
 import { SignalPanel } from "./SignalPanel";
 import { StatsBar } from "./StatsBar";
-import { RefreshCw, Cloud, Mail } from "lucide-react";
+import { RefreshCw, Cloud, Mail, AlertTriangle, Loader2 } from "lucide-react";
 
 interface ApiResponse {
   leads: Lead[];
   total: number;
   filtered: number;
   industries: string[];
-  dataSource?: "live" | "demo";
+  dataSource?: "live" | "bundled" | "demo";
 }
 
 interface DashboardProps {
-  initialData: ApiResponse;
-}
-
-async function fetchWithRetry(url: string, retries = 3): Promise<Response> {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const res = await fetch(url);
-      if (res.ok) return res;
-      console.warn(`[Dashboard] fetch attempt ${i + 1} got HTTP ${res.status}`);
-    } catch (err) {
-      console.warn(`[Dashboard] fetch attempt ${i + 1} failed:`, err);
-    }
-    if (i < retries - 1) await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
-  }
-  throw new Error("Failed after retries");
+  initialData?: ApiResponse;
 }
 
 export function Dashboard({ initialData }: DashboardProps) {
+  const hasInitial = !!(initialData?.leads?.length);
+
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
-  const [leads, setLeads] = useState<Lead[]>(initialData.leads);
-  const [industries, setIndustries] = useState<string[]>(initialData.industries);
-  const [totalLeads, setTotalLeads] = useState(initialData.total);
-  const [filteredCount, setFilteredCount] = useState(initialData.filtered);
+  const [leads, setLeads] = useState<Lead[]>(hasInitial ? initialData.leads : []);
+  const [industries, setIndustries] = useState<string[]>(hasInitial ? initialData.industries : []);
+  const [totalLeads, setTotalLeads] = useState(hasInitial ? initialData.total : 0);
+  const [filteredCount, setFilteredCount] = useState(hasInitial ? initialData.filtered : 0);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
-  const [dataSource, setDataSource] = useState<"live" | "demo">(initialData.dataSource || "demo");
-  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(!hasInitial); // start loading if no initial data
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(hasInitial ? new Date() : null);
+  const [dataSource, setDataSource] = useState<string>(initialData?.dataSource || "");
+  const [error, setError] = useState<string | null>(null);
 
   const fetchLeads = useCallback(async (refresh = false) => {
     setLoading(true);
-    setFetchError(null);
+    setError(null);
+
     const params = new URLSearchParams();
     params.set("timeframe", filters.timeframe);
     params.set("companySizeMin", String(filters.companySizeMin));
@@ -62,28 +51,37 @@ export function Dashboard({ initialData }: DashboardProps) {
     params.set("_t", String(Date.now()));
 
     try {
-      const res = await fetchWithRetry(`/api/leads?${params.toString()}`);
+      const res = await fetch(`/api/leads?${params.toString()}`);
+      if (!res.ok) {
+        throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
+      }
       const data: ApiResponse = await res.json();
       setLeads(data.leads);
       setTotalLeads(data.total);
       setFilteredCount(data.filtered);
       setIndustries(data.industries);
-      setDataSource(data.dataSource || "demo");
+      setDataSource(data.dataSource || "unknown");
       setLastRefreshed(new Date());
-    } catch {
-      setFetchError("Could not refresh leads. Showing cached data.");
+
+      if (data.leads.length === 0) {
+        setError("No leads found. The scrapers returned 0 results for current filters.");
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      setError(`Failed to fetch leads from API: ${message}`);
     } finally {
       setLoading(false);
     }
   }, [filters]);
 
-  // Only fetch client-side when filters change (skip initial mount since we have server data)
+  // Fetch on mount if no server-provided data, and on every filter change after that
   const filtersKey = JSON.stringify(filters);
   const isInitialMount = useState(true);
   useEffect(() => {
     if (isInitialMount[0]) {
       isInitialMount[0] = false;
-      return;
+      // If we already have server data, don't re-fetch on initial mount
+      if (hasInitial) return;
     }
     fetchLeads();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -92,6 +90,47 @@ export function Dashboard({ initialData }: DashboardProps) {
   const selectedLead = selectedLeadId
     ? leads.find((l) => l.id === selectedLeadId) || null
     : null;
+
+  // ── Loading state ──────────────────────────────────────────────────
+  if (loading && leads.length === 0) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 text-blue-600 animate-spin mx-auto mb-3" />
+          <p className="text-sm text-gray-600">Fetching leads from scraped sources...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Error state (no data at all) ──────────────────────────────────
+  if (!loading && leads.length === 0 && error) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="bg-white rounded-lg shadow-sm border border-red-200 p-8 max-w-lg text-center">
+          <AlertTriangle className="w-10 h-10 text-red-500 mx-auto mb-3" />
+          <h2 className="text-lg font-semibold text-gray-900 mb-2">No Leads Available</h2>
+          <p className="text-sm text-red-600 mb-4">{error}</p>
+          <p className="text-xs text-gray-500 mb-4">
+            This likely means the /api/leads endpoint is unreachable or the scrapers
+            returned no results. Check the browser console and terminal for details.
+          </p>
+          <button
+            onClick={() => fetchLeads(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Data source label ─────────────────────────────────────────────
+  const sourceLabel = dataSource === "live" ? "Live Scraped" : dataSource === "bundled" ? "Bundled (Real)" : "Data";
+  const sourceColor = dataSource === "live" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700";
+  const dotColor = dataSource === "live" ? "bg-green-500" : "bg-blue-500";
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -114,26 +153,20 @@ export function Dashboard({ initialData }: DashboardProps) {
             </div>
             <div className="flex items-center gap-3">
               <span
-                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                  dataSource === "live"
-                    ? "bg-green-100 text-green-700"
-                    : "bg-blue-100 text-blue-700"
-                }`}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${sourceColor}`}
               >
-                <span
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    dataSource === "live" ? "bg-green-500" : "bg-blue-500"
-                  }`}
-                />
-                {dataSource === "live" ? "Live Data" : "Demo Data"}
+                <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
+                {sourceLabel}
               </span>
-              <span className="text-[10px] text-gray-400">
-                Last refreshed:{" "}
-                {lastRefreshed.toLocaleTimeString("en-US", {
-                  hour: "numeric",
-                  minute: "2-digit",
-                })}
-              </span>
+              {lastRefreshed && (
+                <span className="text-[10px] text-gray-400">
+                  Last refreshed:{" "}
+                  {lastRefreshed.toLocaleTimeString("en-US", {
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                </span>
+              )}
               <button
                 onClick={() => fetchLeads(true)}
                 disabled={loading}
@@ -161,10 +194,10 @@ export function Dashboard({ initialData }: DashboardProps) {
       {/* Main Content */}
       <main className="max-w-[1600px] mx-auto px-4 py-4">
         <div className="space-y-4">
-          {/* Error Banner */}
-          {fetchError && (
+          {/* Error Banner (non-fatal — we still have leads showing) */}
+          {error && leads.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 flex items-center justify-between">
-              <span className="text-sm text-amber-700">{fetchError}</span>
+              <span className="text-sm text-amber-700">{error}</span>
               <button
                 onClick={() => fetchLeads(true)}
                 className="text-xs font-medium text-amber-700 hover:text-amber-900 underline"
