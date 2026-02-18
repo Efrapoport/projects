@@ -5,6 +5,7 @@ import {
   Activity,
   CheckCircle2,
   XCircle,
+  AlertTriangle,
   SkipForward,
   Loader2,
   X,
@@ -14,10 +15,11 @@ import {
 
 interface SourceHealth {
   name: string;
-  status: "ok" | "error" | "skipped";
+  status: "ok" | "warn" | "error" | "skipped";
   latencyMs: number;
   jobCount: number;
   error?: string;
+  details?: string;
 }
 
 interface HealthResponse {
@@ -29,6 +31,49 @@ interface HealthResponse {
     total: number;
     allHealthy: boolean;
   };
+}
+
+const statusStyles: Record<string, string> = {
+  ok: "bg-white border-gray-200",
+  warn: "bg-amber-50 border-amber-200",
+  error: "bg-red-50 border-red-200",
+  skipped: "bg-gray-50 border-gray-200 opacity-60",
+};
+
+function StatusIcon({ status }: { status: string }) {
+  switch (status) {
+    case "ok":
+      return <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />;
+    case "warn":
+      return <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />;
+    case "skipped":
+      return <SkipForward className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />;
+    default:
+      return <XCircle className="w-3.5 h-3.5 text-red-500 flex-shrink-0" />;
+  }
+}
+
+function StatusLabel({ status, jobCount, latencyMs }: SourceHealth) {
+  switch (status) {
+    case "ok":
+      return (
+        <div className="flex items-center gap-3 text-[10px] text-gray-500">
+          <span>{jobCount} jobs</span>
+          <span>{latencyMs}ms</span>
+        </div>
+      );
+    case "warn":
+      return (
+        <div className="flex items-center gap-3 text-[10px] text-amber-600">
+          <span>0 jobs</span>
+          {latencyMs > 0 && <span>{latencyMs}ms</span>}
+        </div>
+      );
+    case "skipped":
+      return <span className="text-[10px] text-gray-400">Skipped</span>;
+    default:
+      return <span className="text-[10px] text-red-500">Failed</span>;
+  }
 }
 
 export function HealthCheckButton() {
@@ -88,7 +133,7 @@ export function HealthCheckButton() {
             </div>
 
             {/* Content */}
-            <div className="p-5">
+            <div className="p-5 max-h-[70vh] overflow-y-auto">
               {loading && !data && (
                 <div className="flex flex-col items-center py-8 gap-3">
                   <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
@@ -122,7 +167,7 @@ export function HealthCheckButton() {
                       {data.summary.allHealthy ? (
                         <CheckCircle2 className="w-4 h-4 text-green-600" />
                       ) : (
-                        <XCircle className="w-4 h-4 text-amber-600" />
+                        <AlertTriangle className="w-4 h-4 text-amber-600" />
                       )}
                       <span
                         className={`text-sm font-semibold ${
@@ -132,7 +177,7 @@ export function HealthCheckButton() {
                         }`}
                       >
                         {data.summary.healthy}/{data.summary.total} sources
-                        healthy
+                        returning data
                       </span>
                     </div>
                     <div className="flex items-center gap-3 text-[10px] text-gray-500">
@@ -154,45 +199,27 @@ export function HealthCheckButton() {
                     {data.sources.map((src) => (
                       <div
                         key={src.name}
-                        className={`flex items-center justify-between px-3 py-2 rounded-lg border ${
-                          src.status === "ok"
-                            ? "bg-white border-gray-200"
-                            : src.status === "skipped"
-                              ? "bg-gray-50 border-gray-200 opacity-60"
-                              : "bg-red-50 border-red-200"
-                        }`}
+                        className={`px-3 py-2 rounded-lg border ${statusStyles[src.status] || statusStyles.error}`}
                       >
-                        <div className="flex items-center gap-2.5">
-                          {src.status === "ok" ? (
-                            <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
-                          ) : src.status === "skipped" ? (
-                            <SkipForward className="w-3.5 h-3.5 text-gray-400" />
-                          ) : (
-                            <XCircle className="w-3.5 h-3.5 text-red-500" />
-                          )}
-                          <div>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2.5">
+                            <StatusIcon status={src.status} />
                             <p className="text-xs font-medium text-gray-900">
                               {src.name}
                             </p>
-                            {src.error && (
-                              <p className="text-[10px] text-red-500 mt-0.5 max-w-[280px] truncate">
-                                {src.error}
-                              </p>
-                            )}
                           </div>
+                          <StatusLabel {...src} />
                         </div>
-                        <div className="flex items-center gap-3 text-[10px] text-gray-500">
-                          {src.status === "ok" && (
-                            <>
-                              <span>{src.jobCount} jobs</span>
-                              <span>{src.latencyMs}ms</span>
-                            </>
-                          )}
-                          {src.status === "skipped" && <span>Skipped</span>}
-                          {src.status === "error" && (
-                            <span className="text-red-500">Failed</span>
-                          )}
-                        </div>
+                        {src.error && (
+                          <p className="text-[10px] text-red-500 mt-1 ml-6 max-w-full truncate">
+                            {src.error}
+                          </p>
+                        )}
+                        {src.details && (
+                          <p className="text-[10px] text-gray-400 mt-1 ml-6">
+                            {src.details}
+                          </p>
+                        )}
                       </div>
                     ))}
                   </div>

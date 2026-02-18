@@ -4,6 +4,7 @@ import { checkSourceHealth } from "@/lib/scraper";
 export async function GET() {
   const result = await checkSourceHealth();
 
+  // "ok" = healthy, "warn" and "error" = not healthy, "skipped" = excluded from total
   const okCount = result.sources.filter((s) => s.status === "ok").length;
   const totalCount = result.sources.filter((s) => s.status !== "skipped").length;
 

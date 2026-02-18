@@ -1340,10 +1340,11 @@ export async function scrapeJobs(
 
 export interface SourceHealthResult {
   name: string;
-  status: "ok" | "error" | "skipped";
+  status: "ok" | "warn" | "error" | "skipped";
   latencyMs: number;
   jobCount: number;
   error?: string;
+  details?: string;
 }
 
 export async function checkSourceHealth(): Promise<{
@@ -1357,24 +1358,82 @@ export async function checkSourceHealth(): Promise<{
     { name: "Jobicy", fn: fetchJobicy },
     { name: "Himalayas", fn: fetchHimalayas },
     { name: "Google Jobs", fn: fetchGoogleJobs, requiresKey: true },
-    { name: "EarnBetter", fn: fetchEarnBetter },
     { name: "Indeed", fn: fetchIndeed },
   ];
 
-  const results = await Promise.allSettled(
-    sources.map(async (src): Promise<SourceHealthResult> => {
+  // EarnBetter has 3 sub-strategies — probe each one separately
+  const earnbetterProbe = async (): Promise<SourceHealthResult> => {
+    const start = Date.now();
+    const subResults: string[] = [];
+    let totalJobs = 0;
+
+    // Strategy 1: Direct scrape
+    try {
+      const direct = await earnbetterStrategy1_DirectScrape();
+      subResults.push(`Direct scrape: ${direct.length} jobs`);
+      totalJobs += direct.length;
+    } catch (err) {
+      subResults.push(`Direct scrape: failed (${String(err).slice(0, 80)})`);
+    }
+
+    // Strategy 2: Google Web
+    if (process.env.SERPAPI_KEY) {
+      try {
+        const web = await earnbetterStrategy2_GoogleWeb();
+        subResults.push(`Google Web: ${web.length} jobs`);
+        totalJobs += web.length;
+      } catch (err) {
+        subResults.push(`Google Web: failed (${String(err).slice(0, 80)})`);
+      }
+    } else {
+      subResults.push("Google Web: skipped (no SERPAPI_KEY)");
+    }
+
+    // Strategy 3: Google Jobs
+    if (process.env.SERPAPI_KEY) {
+      try {
+        const gj = await earnbetterStrategy3_GoogleJobs();
+        subResults.push(`Google Jobs: ${gj.length} jobs`);
+        totalJobs += gj.length;
+      } catch (err) {
+        subResults.push(`Google Jobs: failed (${String(err).slice(0, 80)})`);
+      }
+    } else {
+      subResults.push("Google Jobs: skipped (no SERPAPI_KEY)");
+    }
+
+    const latency = Date.now() - start;
+    const status = totalJobs > 0 ? "ok" : "warn";
+    return {
+      name: "EarnBetter",
+      status,
+      latencyMs: latency,
+      jobCount: totalJobs,
+      details: subResults.join(" | "),
+      ...(totalJobs === 0 && { error: "All 3 strategies returned 0 jobs" }),
+    };
+  };
+
+  const results = await Promise.allSettled([
+    ...sources.map(async (src): Promise<SourceHealthResult> => {
       if (src.requiresKey && !process.env.SERPAPI_KEY) {
         return { name: src.name, status: "skipped", latencyMs: 0, jobCount: 0, error: "No SERPAPI_KEY" };
       }
       const start = Date.now();
       try {
         const jobs = await src.fn();
-        return { name: src.name, status: "ok", latencyMs: Date.now() - start, jobCount: jobs.length };
+        const latency = Date.now() - start;
+        // Ran successfully but returned 0 results → warn
+        if (jobs.length === 0) {
+          return { name: src.name, status: "warn", latencyMs: latency, jobCount: 0, error: "Returned 0 results" };
+        }
+        return { name: src.name, status: "ok", latencyMs: latency, jobCount: jobs.length };
       } catch (err) {
         return { name: src.name, status: "error", latencyMs: Date.now() - start, jobCount: 0, error: String(err) };
       }
-    })
-  );
+    }),
+    earnbetterProbe(),
+  ]);
 
   // Also include bundled data status
   const bundled = loadBundledJobs();
