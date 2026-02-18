@@ -538,11 +538,11 @@ async function lookupContacts(companyName: string, apiKey: string): Promise<Cont
   }
 
   try {
-    // Use site:linkedin.com (not /in) so we get BOTH profile pages AND
-    // company pages in one call. We extract contacts from /in/ URLs and
-    // employee counts from /company/ URL snippets — zero extra API cost.
+    // Primary query targets /in/ profiles so all 10 result slots are people.
+    // The broader retry (below) uses site:linkedin.com to catch company pages
+    // for the employee-count side-channel when no contacts are found.
     const titleQuery = CONTACT_SEARCH_KEYWORDS.map((t) => `"${t}"`).join(" OR ");
-    const query = `site:linkedin.com "${companyName}" (${titleQuery})`;
+    const query = `site:linkedin.com/in "${companyName}" (${titleQuery})`;
 
     const params = new URLSearchParams({
       engine: "google",
@@ -577,19 +577,7 @@ async function lookupContacts(companyName: string, apiKey: string): Promise<Cont
       const title = String(item.title || "");
       const snippet = String(item.snippet || "");
 
-      // Extract employee count from /company/ page snippets (free side-channel)
-      if (!sideChannelEmployeeCount && link.includes("linkedin.com/company/")) {
-        const text = `${snippet} ${title}`;
-        // LinkedIn range format: "501–1,000 employees"
-        const rangeMatch = text.match(/([\d,]+)\s*[-–—]\s*([\d,]+)\s*employee/i);
-        if (rangeMatch) {
-          sideChannelEmployeeCount = parseNumericValue(rangeMatch[2]);
-        } else {
-          sideChannelEmployeeCount = extractEmployeeCountFromText(text);
-        }
-      }
-
-      // Only process real LinkedIn profile URLs (must be /in/ not /company/ or /jobs/)
+      // Only process real LinkedIn profile URLs
       if (!link.includes("linkedin.com/in/")) continue;
 
       const { name, role, worksAtCompany } = parseLinkedInResult(title, snippet, companyName);
