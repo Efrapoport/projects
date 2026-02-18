@@ -318,6 +318,10 @@ async function fetchGoogleJobs(): Promise<ScrapedJob[]> {
     "salesforce administrator",
     "salesforce developer",
     "first salesforce admin",
+    "salesforce admin",
+    "CRM administrator salesforce",
+    "salesforce engineer",
+    "business systems administrator salesforce",
   ];
 
   for (const query of queries) {
@@ -1006,7 +1010,7 @@ function postedAtToISO(postedAt: string): string {
 async function fetchIndeed(): Promise<ScrapedJob[]> {
   const allJobs: ScrapedJob[] = [];
   const timer = log.time("indeed");
-  const queries = ["salesforce administrator", "first salesforce admin"];
+  const queries = ["salesforce administrator", "first salesforce admin", "salesforce admin", "CRM administrator salesforce"];
 
   for (const query of queries) {
     try {
