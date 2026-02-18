@@ -233,92 +233,108 @@ export function SignalPanel({ lead, onClose }: SignalPanelProps) {
         </div>
 
         {/* Suggested Contacts */}
-        {lead.contacts.length > 0 && (
-          <div>
-            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-              Suggested Contacts ({lead.contacts.length})
-            </h3>
-            <div className="space-y-2">
-              {lead.contacts.map((contact) => (
-                <div
-                  key={contact.id}
-                  className="flex items-center justify-between p-2.5 border border-gray-200 rounded-lg bg-gray-50"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold ${
-                      contact.confidence === "high"
-                        ? "bg-gradient-to-br from-green-500 to-emerald-600"
-                        : contact.confidence === "medium"
-                          ? "bg-gradient-to-br from-blue-400 to-blue-500"
-                          : "bg-gradient-to-br from-gray-400 to-gray-500"
-                    }`}>
-                      {contact.name
-                        .split(" ")
-                        .map((n) => n[0])
-                        .join("")}
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-gray-900">
-                        {contact.name}
-                      </p>
-                      <div className="flex items-center gap-1.5">
-                        <p className="text-xs text-gray-500">{contact.title}</p>
-                        {contact.confidence && (
-                          <span className={`text-[9px] px-1 py-0.5 rounded font-medium ${
-                            contact.confidence === "high"
-                              ? "bg-green-100 text-green-700"
-                              : contact.confidence === "medium"
-                                ? "bg-blue-100 text-blue-700"
-                                : "bg-gray-100 text-gray-500"
-                          }`}>
-                            {contact.confidence}
-                          </span>
-                        )}
+        <div>
+          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+            Suggested Contacts{lead.contacts.length > 0 && ` (${lead.contacts.length})`}
+          </h3>
+          {lead.contacts.length > 0 ? (
+            <>
+              <div className="space-y-2">
+                {lead.contacts.map((contact) => (
+                  <div
+                    key={contact.id}
+                    className="flex items-center justify-between p-2.5 border border-gray-200 rounded-lg bg-gray-50"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold ${
+                        contact.confidence === "high"
+                          ? "bg-gradient-to-br from-green-500 to-emerald-600"
+                          : contact.confidence === "medium"
+                            ? "bg-gradient-to-br from-blue-400 to-blue-500"
+                            : "bg-gradient-to-br from-gray-400 to-gray-500"
+                      }`}>
+                        {contact.name
+                          .split(" ")
+                          .map((n) => n[0])
+                          .join("")}
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">
+                          {contact.name}
+                        </p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-xs text-gray-500">{contact.title}</p>
+                          {contact.confidence && (
+                            <span className={`text-[9px] px-1 py-0.5 rounded font-medium ${
+                              contact.confidence === "high"
+                                ? "bg-green-100 text-green-700"
+                                : contact.confidence === "medium"
+                                  ? "bg-blue-100 text-blue-700"
+                                  : "bg-gray-100 text-gray-500"
+                            }`}>
+                              {contact.confidence}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
+                    <div className="flex gap-1.5">
+                      {contact.email && (
+                        <a
+                          href={`mailto:${contact.email}`}
+                          className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
+                          title={contact.email}
+                        >
+                          <Mail className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+                      {contact.linkedinUrl ? (
+                        <a
+                          href={contact.linkedinUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
+                          title="View LinkedIn profile"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      ) : (
+                        <a
+                          href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(contact.title + " " + lead.company.name)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-1.5 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-md transition-colors"
+                          title="Search LinkedIn for this role"
+                        >
+                          <Search className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex gap-1.5">
-                    {contact.email && (
-                      <a
-                        href={`mailto:${contact.email}`}
-                        className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
-                        title={contact.email}
-                      >
-                        <Mail className="w-3.5 h-3.5" />
-                      </a>
-                    )}
-                    {contact.linkedinUrl ? (
-                      <a
-                        href={contact.linkedinUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
-                        title="View LinkedIn profile"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
-                    ) : (
-                      <a
-                        href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(contact.title + " " + lead.company.name)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="p-1.5 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-md transition-colors"
-                        title="Search LinkedIn for this role"
-                      >
-                        <Search className="w-3.5 h-3.5" />
-                      </a>
-                    )}
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
+              <p className="text-[10px] text-gray-400 mt-1.5 italic">
+                {lead.contacts.some(c => !c.linkedinUrl)
+                  ? "Decision-makers identified from job posting and LinkedIn"
+                  : "Suggested decision-makers via LinkedIn (indexed by Google)"}
+              </p>
+            </>
+          ) : (
+            <div className="p-3 border border-gray-200 rounded-lg bg-gray-50 text-center">
+              <p className="text-xs text-gray-400">
+                No contacts found on LinkedIn for this company
+              </p>
+              <a
+                href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent("revenue operations OR salesforce " + lead.company.name)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 mt-1.5 text-[11px] text-blue-500 hover:text-blue-700 transition-colors"
+              >
+                <Search className="w-3 h-3" /> Search manually on LinkedIn
+              </a>
             </div>
-            <p className="text-[10px] text-gray-400 mt-1.5 italic">
-              {lead.contacts.some(c => !c.linkedinUrl)
-                ? "Decision-makers identified from job posting and LinkedIn"
-                : "Suggested decision-makers via LinkedIn (indexed by Google)"}
-            </p>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
