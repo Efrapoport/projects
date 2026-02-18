@@ -31,6 +31,11 @@ interface HealthResponse {
     total: number;
     allHealthy: boolean;
   };
+  serpApiQuota?: {
+    exhausted: boolean;
+    error: string | null;
+    detectedAt: number | null;
+  };
 }
 
 const statusStyles: Record<string, string> = {
@@ -193,6 +198,33 @@ export function HealthCheckButton() {
                       )}
                     </div>
                   </div>
+
+                  {/* SerpAPI Quota Alert */}
+                  {data.serpApiQuota?.exhausted && (
+                    <div className="rounded-lg px-4 py-3 mb-4 bg-red-50 border border-red-300">
+                      <div className="flex items-start gap-2">
+                        <XCircle className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <p className="text-sm font-semibold text-red-700">
+                            SerpAPI Quota Exhausted
+                          </p>
+                          <p className="text-xs text-red-600 mt-0.5">
+                            {data.serpApiQuota.error || "Monthly search limit reached."}
+                          </p>
+                          <p className="text-[10px] text-red-500 mt-1">
+                            Google Jobs, EarnBetter, employee counts, and LinkedIn contacts
+                            are all disabled until quota resets. Only free API sources and
+                            bundled data are active.
+                          </p>
+                          {data.serpApiQuota.detectedAt && (
+                            <p className="text-[10px] text-red-400 mt-1">
+                              Detected: {new Date(data.serpApiQuota.detectedAt).toLocaleString()}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Source List */}
                   <div className="space-y-1.5">

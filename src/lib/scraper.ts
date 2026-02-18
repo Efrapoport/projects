@@ -61,6 +61,25 @@ function mergeIntoStore(freshJobs: ScrapedJob[]): ScrapedJob[] {
   return Array.from(jobStore.values()).map(({ lastSeen: _, ...job }) => job);
 }
 
+// ── SerpAPI Quota Tracking ───────────────────────────────────────────
+// Detects 429 (rate limit) responses from SerpAPI and surfaces them
+// as visible errors in the health check and logs.
+
+let serpApiQuotaExhausted = false;
+let serpApiQuotaError: string | null = null;
+let serpApiQuotaDetectedAt: number | null = null;
+
+export function getSerpApiQuotaStatus(): { exhausted: boolean; error: string | null; detectedAt: number | null } {
+  return { exhausted: serpApiQuotaExhausted, error: serpApiQuotaError, detectedAt: serpApiQuotaDetectedAt };
+}
+
+/** Reset the quota flag (e.g. at the start of a new month or after key rotation). */
+export function resetSerpApiQuotaFlag(): void {
+  serpApiQuotaExhausted = false;
+  serpApiQuotaError = null;
+  serpApiQuotaDetectedAt = null;
+}
+
 // ── Shared fetch helper ─────────────────────────────────────────────
 
 async function fetchJSON(url: string, timeoutMs = 15000): Promise<unknown> {
@@ -76,6 +95,20 @@ async function fetchJSON(url: string, timeoutMs = 15000): Promise<unknown> {
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
       },
     });
+
+    // Detect SerpAPI quota exhaustion
+    if (response.status === 429 && url.includes("serpapi.com")) {
+      serpApiQuotaExhausted = true;
+      serpApiQuotaDetectedAt = Date.now();
+      let detail = "SerpAPI monthly quota exhausted (HTTP 429)";
+      try {
+        const body = await response.json() as Record<string, unknown>;
+        if (body.error) detail = `SerpAPI: ${body.error}`;
+      } catch { /* use default message */ }
+      serpApiQuotaError = detail;
+      log.error(detail, { url: url.replace(/api_key=[^&]+/, "api_key=***") });
+      throw new Error(detail);
+    }
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status} from ${url}`);
@@ -1388,6 +1421,7 @@ export async function checkSourceHealth(): Promise<{
   sources: SourceHealthResult[];
   storeSize: number;
   cacheAge: number | null;
+  serpApiQuota: { exhausted: boolean; error: string | null; detectedAt: number | null };
 }> {
   // Lightweight probes — just test if each host is reachable.
   // Does NOT call the actual scrapers (which would burn SerpAPI quota).
@@ -1473,6 +1507,7 @@ export async function checkSourceHealth(): Promise<{
     sources: sourceResults,
     storeSize: jobStore.size,
     cacheAge: cachedJobs ? Date.now() - cacheTimestamp : null,
+    serpApiQuota: getSerpApiQuotaStatus(),
   };
 }
 

@@ -15,6 +15,7 @@ interface ApiResponse {
   total: number;
   industries: string[];
   dataSource?: "live" | "bundled" | "demo";
+  warnings?: string[];
 }
 
 interface DashboardProps {
@@ -33,6 +34,7 @@ export function Dashboard({ initialData }: DashboardProps) {
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(hasInitial ? new Date() : null);
   const [dataSource, setDataSource] = useState<string>(initialData?.dataSource || "");
   const [error, setError] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>(initialData?.warnings || []);
 
   // Client-side filtering — instant response when user changes timeframe/filters
   const filteredLeads = useMemo(
@@ -58,6 +60,7 @@ export function Dashboard({ initialData }: DashboardProps) {
       setIndustries(data.industries);
       setDataSource(data.dataSource || "unknown");
       setLastRefreshed(new Date());
+      setWarnings(data.warnings || []);
 
       if (data.leads.length === 0) {
         setError("No leads found. The scrapers returned 0 results.");
@@ -195,6 +198,21 @@ export function Dashboard({ initialData }: DashboardProps) {
               >
                 Retry
               </button>
+            </div>
+          )}
+
+          {/* SerpAPI Quota Warning */}
+          {warnings.length > 0 && (
+            <div className="bg-red-50 border border-red-300 rounded-lg px-4 py-2.5 flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+              <div className="flex-1">
+                {warnings.map((w, i) => (
+                  <p key={i} className="text-sm text-red-700">{w}</p>
+                ))}
+                <p className="text-[10px] text-red-500 mt-1">
+                  Check the Health panel for details. Data from previous scrapes is still available.
+                </p>
+              </div>
             </div>
           )}
 
