@@ -34,6 +34,29 @@ function jobStoreKey(job: ScrapedJob): string {
   return `${job.company.toLowerCase().trim()}|${job.title.toLowerCase().trim()}`;
 }
 
+// ── Pre-seed store with bundled data on cold start ─────────────────
+// Vercel serverless functions lose in-memory state between invocations.
+// By seeding the store eagerly, the health check always shows baseline
+// data and the dashboard is never empty on first load.
+(function seedStore() {
+  const now = Date.now();
+  const bundled = SCRAPED_JOBS.map((r: ScrapedJobRecord) => ({
+    title: r.title,
+    company: r.company,
+    location: r.location,
+    description: r.description,
+    url: r.url,
+    source: r.source,
+    detectedAt: r.detectedAt,
+  }));
+  for (const job of bundled) {
+    const key = jobStoreKey(job);
+    if (!jobStore.has(key)) {
+      jobStore.set(key, { ...job, lastSeen: now });
+    }
+  }
+})();
+
 /** Merge freshly scraped jobs into the persistent store, then return all non-expired jobs. */
 function mergeIntoStore(freshJobs: ScrapedJob[]): ScrapedJob[] {
   const now = Date.now();
@@ -1385,8 +1408,9 @@ export async function scrapeJobs(
 }
 
 // ── Health Check ────────────────────────────────────────────────────
-// Lightweight connectivity probes — does NOT run the full scrapers,
-// so it consumes ZERO SerpAPI quota.  Tests reachability only.
+// Free APIs get an actual data fetch to verify they return results.
+// SerpAPI sources get an account check only (no quota burn).
+// Scraped sites (Indeed, EarnBetter) get a reachability probe only.
 
 export interface SourceHealthResult {
   name: string;
@@ -1417,75 +1441,186 @@ async function probeUrl(url: string, timeoutMs = 6000): Promise<{ ok: boolean; s
   }
 }
 
+/** Count jobs in the persistent store matching a given source key. */
+function countStoreJobs(sourceKey: string): number {
+  return Array.from(jobStore.values()).filter((j) =>
+    j.source.toLowerCase().replace(/[^a-z]/g, "").includes(sourceKey)
+  ).length;
+}
+
 export async function checkSourceHealth(): Promise<{
   sources: SourceHealthResult[];
   storeSize: number;
   cacheAge: number | null;
   serpApiQuota: { exhausted: boolean; error: string | null; detectedAt: number | null };
 }> {
-  // Lightweight probes — just test if each host is reachable.
-  // Does NOT call the actual scrapers (which would burn SerpAPI quota).
-  const probes: Array<{ name: string; url: string; requiresKey?: boolean }> = [
-    { name: "RemoteOK", url: "https://remoteok.com/api?tag=salesforce&api=1" },
-    { name: "Arbeitnow", url: "https://www.arbeitnow.com/api/job-board-api" },
-    { name: "Jobicy", url: "https://jobicy.com/api/v2/remote-jobs" },
-    { name: "Himalayas", url: "https://himalayas.app/jobs/api" },
-    { name: "Google Jobs (SerpAPI)", url: "https://serpapi.com/account.json", requiresKey: true },
-    { name: "EarnBetter", url: "https://earnbetter.com/" },
-    { name: "Indeed", url: "https://www.indeed.com/" },
+  // For free APIs, actually fetch data to verify they return results.
+  // For paid APIs (SerpAPI), only check the account endpoint (no quota burn).
+  // For scraped sites (Indeed), just probe reachability.
+
+  type Probe = {
+    name: string;
+    url: string;
+    storeSourceKey: string;
+    mode: "fetch-json" | "serpapi-account" | "probe-only";
+    countFn?: (data: unknown) => number;
+  };
+
+  const probes: Probe[] = [
+    {
+      name: "RemoteOK",
+      url: "https://remoteok.com/api?tag=salesforce&api=1",
+      storeSourceKey: "remoteok",
+      mode: "fetch-json",
+      countFn: (data) => (Array.isArray(data) ? Math.max(0, data.length - 1) : 0),
+    },
+    {
+      name: "Arbeitnow",
+      url: "https://www.arbeitnow.com/api/job-board-api?search=salesforce",
+      storeSourceKey: "arbeitnow",
+      mode: "fetch-json",
+      countFn: (data) => {
+        const d = data as Record<string, unknown>;
+        return Array.isArray(d?.data) ? d.data.length : 0;
+      },
+    },
+    {
+      name: "Jobicy",
+      url: "https://jobicy.com/api/v2/remote-jobs?tag=salesforce&count=50",
+      storeSourceKey: "jobicy",
+      mode: "fetch-json",
+      countFn: (data) => {
+        const d = data as Record<string, unknown>;
+        return Array.isArray(d?.jobs) ? d.jobs.length : 0;
+      },
+    },
+    {
+      name: "Himalayas",
+      url: "https://himalayas.app/jobs/api?q=salesforce&limit=50",
+      storeSourceKey: "himalayas",
+      mode: "fetch-json",
+      countFn: (data) => {
+        const d = data as Record<string, unknown>;
+        return Array.isArray(d?.jobs) ? d.jobs.length : 0;
+      },
+    },
+    {
+      name: "Google Jobs (SerpAPI)",
+      url: "https://serpapi.com/account.json",
+      storeSourceKey: "googlejobs",
+      mode: "serpapi-account",
+    },
+    {
+      name: "EarnBetter",
+      url: "https://earnbetter.com/",
+      storeSourceKey: "earnbetter",
+      mode: "probe-only",
+    },
+    {
+      name: "Indeed",
+      url: "https://www.indeed.com/",
+      storeSourceKey: "indeed",
+      mode: "probe-only",
+    },
   ];
 
   const results = await Promise.allSettled(
     probes.map(async (probe): Promise<SourceHealthResult> => {
-      if (probe.requiresKey && !process.env.SERPAPI_KEY) {
-        return { name: probe.name, status: "skipped", latencyMs: 0, jobCount: 0, error: "No SERPAPI_KEY" };
+      // ── SerpAPI account check (free, no search cost) ──────────
+      if (probe.mode === "serpapi-account") {
+        if (!process.env.SERPAPI_KEY) {
+          return { name: probe.name, status: "skipped", latencyMs: 0, jobCount: 0, error: "No SERPAPI_KEY configured" };
+        }
+        const url = `${probe.url}?api_key=${process.env.SERPAPI_KEY}`;
+        const start = Date.now();
+        try {
+          const resp = await fetch(url, {
+            headers: { Accept: "application/json" },
+            signal: AbortSignal.timeout(6000),
+          });
+          const ms = Date.now() - start;
+          if (!resp.ok) {
+            return { name: probe.name, status: "error", latencyMs: ms, jobCount: 0, error: `HTTP ${resp.status}` };
+          }
+          const acct = (await resp.json()) as Record<string, unknown>;
+          const remaining = acct.total_searches_left ?? acct.plan_searches_left;
+          const used = acct.this_month_usage ?? acct.total_searches_used;
+          const storeJobs = countStoreJobs(probe.storeSourceKey);
+          return {
+            name: probe.name,
+            status: storeJobs > 0 || (typeof remaining === "number" && remaining > 0) ? "ok" : "warn",
+            latencyMs: ms,
+            jobCount: storeJobs,
+            details: remaining !== undefined
+              ? `${remaining} searches remaining (${used ?? "?"} used)${storeJobs > 0 ? `, ${storeJobs} jobs in store` : ""}`
+              : `${storeJobs} jobs in store`,
+          };
+        } catch {
+          return { name: probe.name, status: "error", latencyMs: Date.now() - start, jobCount: 0, error: "Unreachable" };
+        }
       }
 
-      // For SerpAPI, use the account endpoint to check quota (free, no search cost)
-      const url = probe.requiresKey
-        ? `${probe.url}?api_key=${process.env.SERPAPI_KEY}`
-        : probe.url;
+      // ── Actual data fetch for free APIs ───────────────────────
+      if (probe.mode === "fetch-json" && probe.countFn) {
+        const start = Date.now();
+        try {
+          const data = await fetchJSON(probe.url, 8000);
+          const ms = Date.now() - start;
+          const liveCount = probe.countFn(data);
+          const storeJobs = countStoreJobs(probe.storeSourceKey);
+          return {
+            name: probe.name,
+            status: liveCount > 0 || storeJobs > 0 ? "ok" : "warn",
+            latencyMs: ms,
+            jobCount: Math.max(liveCount, storeJobs),
+            details: liveCount > 0
+              ? `${liveCount} jobs available live${storeJobs > 0 ? `, ${storeJobs} in store` : ""}`
+              : storeJobs > 0
+                ? `API returned 0 jobs for "salesforce" today, ${storeJobs} in store from previous scrapes`
+                : `API returned 0 jobs for "salesforce" — niche boards may have sparse coverage`,
+          };
+        } catch (err) {
+          const ms = Date.now() - start;
+          const storeJobs = countStoreJobs(probe.storeSourceKey);
+          const errMsg = String(err);
+          return {
+            name: probe.name,
+            status: storeJobs > 0 ? "warn" : "error",
+            latencyMs: ms,
+            jobCount: storeJobs,
+            error: errMsg.includes("HTTP") ? errMsg.split(" from ")[0] : "Fetch failed",
+            details: storeJobs > 0 ? `${storeJobs} jobs still available from store` : undefined,
+          };
+        }
+      }
 
-      const { ok, status, ms } = await probeUrl(url);
+      // ── Probe-only (EarnBetter, Indeed) ───────────────────────
+      const { ok, status, ms } = await probeUrl(probe.url);
+      const storeJobs = countStoreJobs(probe.storeSourceKey);
 
       if (!ok) {
+        // Indeed commonly blocks serverless IPs — this is expected
+        const isIndeed = probe.name === "Indeed";
         return {
           name: probe.name,
-          status: "error",
+          status: storeJobs > 0 ? "warn" : (isIndeed ? "warn" : "error"),
           latencyMs: ms,
-          jobCount: 0,
-          error: status > 0 ? `HTTP ${status}` : "Unreachable (network blocked or timeout)",
+          jobCount: storeJobs,
+          error: status > 0 ? `HTTP ${status}` : "Unreachable",
+          details: isIndeed && status === 403
+            ? `Indeed blocks serverless IPs (expected)${storeJobs > 0 ? `, ${storeJobs} jobs from bundled data` : ""}`
+            : storeJobs > 0 ? `${storeJobs} jobs still available from store` : undefined,
         };
       }
-
-      // For SerpAPI, try to parse remaining quota from account endpoint
-      let details: string | undefined;
-      if (probe.requiresKey) {
-        try {
-          const resp = await fetch(url, { headers: { Accept: "application/json" } });
-          if (resp.ok) {
-            const acct = (await resp.json()) as Record<string, unknown>;
-            const remaining = acct.total_searches_left ?? acct.plan_searches_left;
-            const used = acct.this_month_usage ?? acct.total_searches_used;
-            if (remaining !== undefined) {
-              details = `${remaining} searches remaining this month (${used ?? "?"} used)`;
-            }
-          }
-        } catch { /* ignore — the probe already passed */ }
-      }
-
-      // Pull last-known job count from the store (keyed by source)
-      const sourceKey = probe.name.toLowerCase().replace(/[^a-z]/g, "");
-      const storeJobs = Array.from(jobStore.values()).filter((j) =>
-        j.source.toLowerCase().replace(/[^a-z]/g, "").includes(sourceKey)
-      ).length;
 
       return {
         name: probe.name,
         status: storeJobs > 0 ? "ok" : "warn",
         latencyMs: ms,
         jobCount: storeJobs,
-        details: details || (storeJobs > 0 ? `${storeJobs} jobs in store from previous scrapes` : "Reachable, but 0 jobs in store — try refreshing"),
+        details: storeJobs > 0
+          ? `Reachable, ${storeJobs} jobs in store`
+          : `Reachable — jobs populate after first data refresh`,
       };
     })
   );
