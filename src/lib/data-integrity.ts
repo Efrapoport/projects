@@ -216,24 +216,121 @@ export function getValidationCacheStats(): {
   return { cached: urlCache.size, valid, invalid };
 }
 
-// ── Company Size Enrichment via SerpAPI ──────────────────────────────
-// Uses Google's Knowledge Graph (via SerpAPI) to look up employee counts.
-// Falls back to parsing snippets from organic results.
+// ── Company Size Enrichment ──────────────────────────────────────────
+// Two-source waterfall for employee count enrichment:
+//   1. Google Knowledge Graph Search API (free, 100 req/day, 3000/month)
+//   2. SerpAPI Google Search (paid, thousands of searches)
+// Falls back to parsing snippets from organic results and job descriptions.
 
-const employeeCache = new Map<string, { count: number; checkedAt: number }>();
+const employeeCache = new Map<string, { count: number; source: string; checkedAt: number }>();
 const EMPLOYEE_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+// ── Google Knowledge Graph Search API ───────────────────────────────
+// Native Google API — free tier: 100 requests/day (3,000/month).
+// Returns structured entity data including employee counts for
+// well-known companies. Requires a Google Cloud API key.
+// Docs: https://developers.google.com/knowledge-graph
+
+interface KgSearchResult {
+  result?: {
+    name?: string;
+    description?: string;
+    detailedDescription?: {
+      articleBody?: string;
+      url?: string;
+    };
+    [key: string]: unknown;
+  };
+  resultScore?: number;
+}
+
+/**
+ * Look up employee count via Google Knowledge Graph Search API.
+ * Returns { count, found } — count=0 if not found.
+ */
+async function lookupEmployeeCountViaGoogleKG(
+  companyName: string,
+  apiKey: string
+): Promise<{ count: number; found: boolean }> {
+  try {
+    const params = new URLSearchParams({
+      query: companyName,
+      key: apiKey,
+      limit: "3",
+      types: "Organization,Corporation,Company",
+      indent: "false",
+    });
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    const response = await fetch(
+      `https://kgsearch.googleapis.com/v1/entities:search?${params.toString()}`,
+      {
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      }
+    );
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      if (response.status === 429) {
+        log.warn("Google KG API rate limit hit", { company: companyName, status: response.status });
+      }
+      return { count: 0, found: false };
+    }
+
+    const data = (await response.json()) as { itemListElement?: KgSearchResult[] };
+    const items = data.itemListElement || [];
+
+    for (const item of items) {
+      const entity = item.result;
+      if (!entity) continue;
+
+      // Check if this entity matches our company (fuzzy match on name)
+      const entityName = (entity.name || "").toLowerCase();
+      const queryName = companyName.toLowerCase();
+      if (!entityName.includes(queryName) && !queryName.includes(entityName)) {
+        continue;
+      }
+
+      // Try to extract employee count from the detailed description
+      const articleBody = entity.detailedDescription?.articleBody || "";
+      let count = extractEmployeeCountFromText(articleBody);
+
+      // Also try any other string fields that might contain employee info
+      if (!count) {
+        for (const [key, value] of Object.entries(entity)) {
+          if (typeof value === "string" && key !== "name" && key !== "url") {
+            count = extractEmployeeCountFromText(value);
+            if (count > 0) break;
+          }
+        }
+      }
+
+      if (count > 0) {
+        log.debug(`Google KG found employee count for "${companyName}"`, {
+          entityName: entity.name,
+          count,
+          score: item.resultScore,
+        });
+        return { count, found: true };
+      }
+    }
+
+    return { count: 0, found: false };
+  } catch (err) {
+    log.debug(`Google KG lookup failed for "${companyName}"`, { error: String(err) });
+    return { count: 0, found: false };
+  }
+}
 
 /**
  * Look up employee count for a single company using SerpAPI.
  * Returns 0 if unavailable.
  */
-async function lookupEmployeeCount(companyName: string, apiKey: string): Promise<number> {
-  const cacheKey = companyName.toLowerCase().trim();
-  const cached = employeeCache.get(cacheKey);
-  if (cached && Date.now() - cached.checkedAt < EMPLOYEE_CACHE_TTL) {
-    return cached.count;
-  }
-
+async function lookupEmployeeCountViaSerpApi(companyName: string, apiKey: string): Promise<number> {
   try {
     const params = new URLSearchParams({
       engine: "google",
@@ -253,7 +350,6 @@ async function lookupEmployeeCount(companyName: string, apiKey: string): Promise
     clearTimeout(timeout);
 
     if (!response.ok) {
-      employeeCache.set(cacheKey, { count: 0, checkedAt: Date.now() });
       return 0;
     }
 
@@ -295,10 +391,8 @@ async function lookupEmployeeCount(companyName: string, apiKey: string): Promise
       }
     }
 
-    employeeCache.set(cacheKey, { count, checkedAt: Date.now() });
     return count;
   } catch {
-    employeeCache.set(cacheKey, { count: 0, checkedAt: Date.now() });
     return 0;
   }
 }
@@ -357,23 +451,59 @@ function parseNumericValue(str: string): number {
 }
 
 /**
+ * Enrichment source tracking for side-by-side comparison.
+ */
+export interface EmployeeEnrichmentStats {
+  total: number;
+  fromGoogleKG: number;
+  fromSerpApi: number;
+  fromCache: number;
+  notFound: number;
+  googleKgAvailable: boolean;
+  serpApiAvailable: boolean;
+}
+
+// Module-level stats for the most recent enrichment run
+let lastEnrichmentStats: EmployeeEnrichmentStats | null = null;
+
+export function getLastEnrichmentStats(): EmployeeEnrichmentStats | null {
+  return lastEnrichmentStats;
+}
+
+/**
  * Batch enrich employee counts for a list of companies.
- * Limits to top N companies and respects concurrency limits.
+ * Uses a two-source waterfall:
+ *   1. Google Knowledge Graph API (free, 100/day) — tries ALL companies first
+ *   2. SerpAPI Google Search (paid) — fills in what Google KG missed
+ * Logs side-by-side comparison of both sources.
  */
 export async function batchEnrichEmployeeCounts(
   companies: Array<{ name: string }>,
-  timeoutMs = 15000
+  timeoutMs = 25000
 ): Promise<Map<string, number>> {
-  const apiKey = process.env.SERPAPI_KEY;
-  if (!apiKey) {
-    log.debug("No SERPAPI_KEY — skipping employee count enrichment");
+  const serpApiKey = process.env.SERPAPI_KEY;
+  const googleKgKey = process.env.GOOGLE_KG_API_KEY;
+
+  if (!serpApiKey && !googleKgKey) {
+    log.debug("No SERPAPI_KEY or GOOGLE_KG_API_KEY — skipping employee count enrichment");
     return new Map();
   }
 
   const timer = log.time("employee-enrichment");
   const results = new Map<string, number>();
-  const MAX_LOOKUPS = 5; // Keep low — each call uses 1 SerpAPI search (free tier: 100/month)
-  const CONCURRENCY = 2;
+  const MAX_LOOKUPS = 15; // User has paid SerpAPI — can enrich more companies
+  const CONCURRENCY = 3;
+
+  // Track source attribution for side-by-side comparison
+  const stats: EmployeeEnrichmentStats = {
+    total: 0,
+    fromGoogleKG: 0,
+    fromSerpApi: 0,
+    fromCache: 0,
+    notFound: 0,
+    googleKgAvailable: !!googleKgKey,
+    serpApiAvailable: !!serpApiKey,
+  };
 
   // Deduplicate and limit
   const unique = new Map<string, string>(); // normalized → original
@@ -382,23 +512,98 @@ export async function batchEnrichEmployeeCounts(
     if (!unique.has(key)) unique.set(key, c.name);
   }
   const toEnrich = Array.from(unique.entries()).slice(0, MAX_LOOKUPS);
+  stats.total = toEnrich.length;
+
+  // Log current baseline before enrichment
+  log.info("Employee enrichment starting", {
+    uniqueCompanies: unique.size,
+    enriching: toEnrich.length,
+    maxLookups: MAX_LOOKUPS,
+    sources: {
+      googleKG: googleKgKey ? "enabled" : "no API key",
+      serpApi: serpApiKey ? "enabled" : "no API key",
+    },
+    cacheSize: employeeCache.size,
+  });
 
   const timeoutPromise = new Promise<"timeout">((resolve) =>
     setTimeout(() => resolve("timeout"), timeoutMs)
   );
 
   const enrichPromise = (async () => {
-    for (let i = 0; i < toEnrich.length; i += CONCURRENCY) {
-      const batch = toEnrich.slice(i, i + CONCURRENCY);
-      const batchResults = await Promise.allSettled(
-        batch.map(([, name]) => lookupEmployeeCount(name, apiKey))
-      );
-
-      batchResults.forEach((result, j) => {
-        const key = batch[j][0];
-        results.set(key, result.status === "fulfilled" ? result.value : 0);
-      });
+    // ── Phase 1: Check cache ──────────────────────────────────────
+    const uncached: Array<[string, string]> = [];
+    for (const [key, name] of toEnrich) {
+      const cached = employeeCache.get(key);
+      if (cached && Date.now() - cached.checkedAt < EMPLOYEE_CACHE_TTL) {
+        results.set(key, cached.count);
+        if (cached.count > 0) stats.fromCache++;
+      } else {
+        uncached.push([key, name]);
+      }
     }
+
+    if (uncached.length === 0) {
+      log.debug("All employee counts served from cache");
+      return "done";
+    }
+
+    // ── Phase 2: Google Knowledge Graph API (free, 100/day) ──────
+    const needsSerpApi: Array<[string, string]> = [];
+
+    if (googleKgKey) {
+      log.debug(`Google KG: looking up ${uncached.length} companies`);
+      for (let i = 0; i < uncached.length; i += CONCURRENCY) {
+        const batch = uncached.slice(i, i + CONCURRENCY);
+        const batchResults = await Promise.allSettled(
+          batch.map(([, name]) => lookupEmployeeCountViaGoogleKG(name, googleKgKey))
+        );
+
+        batchResults.forEach((result, j) => {
+          const [key] = batch[j];
+          if (result.status === "fulfilled" && result.value.found && result.value.count > 0) {
+            results.set(key, result.value.count);
+            employeeCache.set(key, { count: result.value.count, source: "google-kg", checkedAt: Date.now() });
+            stats.fromGoogleKG++;
+          } else {
+            needsSerpApi.push(batch[j]);
+          }
+        });
+      }
+      log.debug(`Google KG phase complete`, {
+        found: stats.fromGoogleKG,
+        remaining: needsSerpApi.length,
+      });
+    } else {
+      // No Google KG key — all companies go to SerpAPI
+      needsSerpApi.push(...uncached);
+    }
+
+    // ── Phase 3: SerpAPI Google Search (paid, fills gaps) ────────
+    if (serpApiKey && needsSerpApi.length > 0) {
+      log.debug(`SerpAPI: looking up ${needsSerpApi.length} companies`);
+      for (let i = 0; i < needsSerpApi.length; i += CONCURRENCY) {
+        const batch = needsSerpApi.slice(i, i + CONCURRENCY);
+        const batchResults = await Promise.allSettled(
+          batch.map(([, name]) => lookupEmployeeCountViaSerpApi(name, serpApiKey))
+        );
+
+        batchResults.forEach((result, j) => {
+          const [key] = batch[j];
+          const count = result.status === "fulfilled" ? result.value : 0;
+          results.set(key, count);
+          employeeCache.set(key, { count, source: count > 0 ? "serpapi" : "not-found", checkedAt: Date.now() });
+          if (count > 0) stats.fromSerpApi++;
+        });
+      }
+    } else if (!serpApiKey && needsSerpApi.length > 0) {
+      // No SerpAPI key — mark remaining as not found
+      for (const [key] of needsSerpApi) {
+        results.set(key, 0);
+        employeeCache.set(key, { count: 0, source: "not-found", checkedAt: Date.now() });
+      }
+    }
+
     return "done";
   })();
 
@@ -411,13 +616,42 @@ export async function batchEnrichEmployeeCounts(
     });
   }
 
-  const found = Array.from(results.values()).filter((v) => v > 0).length;
-  timer.end("Employee count enrichment", {
-    total: toEnrich.length,
-    found,
-    unknown: toEnrich.length - found,
+  const totalFound = Array.from(results.values()).filter((v) => v > 0).length;
+  stats.notFound = stats.total - totalFound;
+
+  // ── Side-by-side comparison log ─────────────────────────────────
+  const coveragePct = stats.total > 0 ? Math.round((totalFound / stats.total) * 100) : 0;
+  timer.end("Employee count enrichment — SIDE-BY-SIDE RESULTS", {
+    total: stats.total,
+    found: totalFound,
+    coverage: `${coveragePct}%`,
+    breakdown: {
+      googleKG: stats.fromGoogleKG,
+      serpApi: stats.fromSerpApi,
+      cache: stats.fromCache,
+      notFound: stats.notFound,
+    },
+    sourcesEnabled: {
+      googleKG: stats.googleKgAvailable,
+      serpApi: stats.serpApiAvailable,
+    },
   });
 
+  // Log improvement comparison
+  if (stats.googleKgAvailable) {
+    const kgPct = stats.total > 0 ? Math.round((stats.fromGoogleKG / stats.total) * 100) : 0;
+    const serpPct = stats.total > 0 ? Math.round((stats.fromSerpApi / stats.total) * 100) : 0;
+    log.info("📊 Employee enrichment source comparison", {
+      googleKG: `${stats.fromGoogleKG}/${stats.total} (${kgPct}%)`,
+      serpApi: `${stats.fromSerpApi}/${stats.total} (${serpPct}%)`,
+      combined: `${totalFound}/${stats.total} (${coveragePct}%)`,
+      improvement: stats.fromGoogleKG > 0
+        ? `Google KG added ${stats.fromGoogleKG} companies that would not have been found by SerpAPI alone`
+        : "Google KG did not find additional companies this run",
+    });
+  }
+
+  lastEnrichmentStats = stats;
   return results;
 }
 
@@ -760,8 +994,8 @@ export async function batchLookupContacts(
   const timer = log.time("contact-lookup");
   const contacts = new Map<string, LookedUpContact[]>();
   const employeeCounts = new Map<string, number>();
-  const MAX_LOOKUPS = 5; // Keep low — each call uses 1-2 SerpAPI searches (free tier: 100/month)
-  const CONCURRENCY = 2;
+  const MAX_LOOKUPS = 10; // User has paid SerpAPI — can look up more contacts
+  const CONCURRENCY = 3;
 
   // Deduplicate
   const unique = new Map<string, string>();

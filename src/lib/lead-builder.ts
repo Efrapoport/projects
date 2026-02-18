@@ -1,7 +1,7 @@
 import { Lead, Signal, Company, Contact } from "./types";
 import { computeLeadScore, generateTriggerEvent } from "./scoring";
 import { ScrapedJob } from "./scraper";
-import { batchValidateCompanyUrls, batchEnrichEmployeeCounts, batchLookupContacts, safeLinkedInUrl, safeCompanySearchUrl, extractEmployeeCountFromText, extractReportingManager } from "./data-integrity";
+import { batchValidateCompanyUrls, batchEnrichEmployeeCounts, batchLookupContacts, safeLinkedInUrl, safeCompanySearchUrl, extractEmployeeCountFromText, extractReportingManager, getLastEnrichmentStats } from "./data-integrity";
 import type { LookedUpContact } from "./data-integrity";
 import { createLogger } from "./logger";
 
@@ -51,11 +51,21 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
       }
     }
 
+    // Get detailed enrichment stats for side-by-side comparison
+    const enrichStats = getLastEnrichmentStats();
     log.info("Company enrichment complete", {
       urlValidated: validationResults.size,
       employeeEnriched: Array.from(empResults.values()).filter((v) => v > 0).length,
       employeeFromLinkedIn: linkedInSideChannelFills,
       companiesWithContacts: Array.from(contactRes.contacts.values()).filter((v) => v.length > 0).length,
+      ...(enrichStats && {
+        employeeSources: {
+          googleKG: enrichStats.fromGoogleKG,
+          serpApi: enrichStats.fromSerpApi,
+          cached: enrichStats.fromCache,
+          notFound: enrichStats.notFound,
+        },
+      }),
     });
   } catch (error) {
     log.warn("Company enrichment failed — using safe fallbacks", { error: String(error) });

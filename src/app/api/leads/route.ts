@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { scrapeJobs, getSerpApiQuotaStatus } from "@/lib/scraper";
 import { buildLeadsFromJobs, getIndustriesFromLeads } from "@/lib/lead-builder";
+import { getLastEnrichmentStats } from "@/lib/data-integrity";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("api/leads");
@@ -72,6 +73,9 @@ export async function GET(request: NextRequest) {
       warnings.push(quotaStatus.error || "SerpAPI quota exhausted — Google Jobs, EarnBetter, contacts, and employee data unavailable");
     }
 
+    // Include enrichment stats for transparency
+    const enrichmentStats = getLastEnrichmentStats();
+
     return NextResponse.json(
       {
         leads: leadsForClient,
@@ -80,6 +84,7 @@ export async function GET(request: NextRequest) {
         dataSource,
         sourceBreakdown,
         ...(warnings.length > 0 && { warnings }),
+        ...(enrichmentStats && { enrichmentStats }),
       },
       {
         headers: {
