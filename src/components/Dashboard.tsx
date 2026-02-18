@@ -201,6 +201,70 @@ export function Dashboard({ initialData }: DashboardProps) {
             </div>
           )}
 
+          {/* Data freshness banner */}
+          <div
+            className={`rounded-lg px-4 py-3 flex items-center justify-between ${
+              dataSource === "live"
+                ? "bg-green-50 border border-green-200"
+                : "bg-amber-50 border border-amber-200"
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  dataSource === "live" ? "bg-green-500" : "bg-amber-500"
+                }`}
+              />
+              <span className="text-sm text-gray-700">
+                {dataSource === "live" ? (
+                  <>
+                    Showing <strong>live-scraped</strong> data
+                    {lastRefreshed && (
+                      <> as of{" "}
+                        <strong>
+                          {lastRefreshed.toLocaleTimeString("en-US", {
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}
+                        </strong>
+                      </>
+                    )}
+                    .
+                  </>
+                ) : (
+                  <>
+                    Showing <strong>bundled</strong> data
+                    {lastRefreshed
+                      ? <> loaded at{" "}
+                          <strong>
+                            {lastRefreshed.toLocaleTimeString("en-US", {
+                              hour: "numeric",
+                              minute: "2-digit",
+                            })}
+                          </strong>.
+                        </>
+                      : <>.</>
+                    }{" "}
+                    Click <strong>&quot;Refresh&quot;</strong> in the top-right corner to pull
+                    fresh results from all scrapers.
+                  </>
+                )}
+              </span>
+            </div>
+            <button
+              onClick={() => fetchLeads(true)}
+              disabled={loading}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors disabled:opacity-50 ${
+                dataSource === "live"
+                  ? "text-green-700 bg-green-100 hover:bg-green-200"
+                  : "text-amber-700 bg-amber-100 hover:bg-amber-200"
+              }`}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+              {loading ? "Refreshing..." : "Refresh Now"}
+            </button>
+          </div>
+
           {/* SerpAPI Quota Warning */}
           {warnings.length > 0 && (
             <div className="bg-red-50 border border-red-300 rounded-lg px-4 py-2.5 flex items-start gap-2.5">
