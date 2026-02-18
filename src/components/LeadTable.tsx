@@ -12,6 +12,7 @@ import {
   ArrowUpRight,
   CheckCircle2,
   AlertCircle,
+  UserCheck,
 } from "lucide-react";
 
 interface LeadTableProps {
@@ -158,6 +159,22 @@ export function LeadTable({
                       <span className="text-xs text-gray-400">
                         {lead.company.city}, {lead.company.state}
                       </span>
+                      {lead.hiringManager && (
+                        <div className="flex items-center gap-1 mt-0.5">
+                          <UserCheck className={`w-3 h-3 ${
+                            lead.hiringManager.confidence === "high"
+                              ? "text-green-500"
+                              : lead.hiringManager.confidence === "medium"
+                                ? "text-blue-400"
+                                : "text-gray-400"
+                          }`} />
+                          <span className="text-[10px] text-gray-500 truncate max-w-[180px]">
+                            {lead.hiringManager.name
+                              ? `${lead.hiringManager.name} (${lead.hiringManager.title})`
+                              : lead.hiringManager.title}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </td>

@@ -16,6 +16,7 @@ import {
   UserPlus,
   CheckCircle2,
   Search,
+  UserCheck,
 } from "lucide-react";
 
 interface SignalPanelProps {
@@ -219,6 +220,96 @@ export function SignalPanel({ lead, onClose }: SignalPanelProps) {
             </span>
           </div>
         </div>
+
+        {/* Likely Hiring Manager */}
+        {lead.hiringManager && (
+          <div className={`border rounded-lg p-3 ${
+            lead.hiringManager.confidence === "high"
+              ? "bg-green-50 border-green-200"
+              : lead.hiringManager.confidence === "medium"
+                ? "bg-blue-50 border-blue-200"
+                : "bg-gray-50 border-gray-200"
+          }`}>
+            <h3 className={`text-xs font-semibold uppercase tracking-wider mb-2 ${
+              lead.hiringManager.confidence === "high"
+                ? "text-green-800"
+                : lead.hiringManager.confidence === "medium"
+                  ? "text-blue-800"
+                  : "text-gray-600"
+            }`}>
+              <span className="flex items-center gap-1">
+                <UserCheck className="w-3.5 h-3.5" />
+                Likely Hiring Manager
+              </span>
+            </h3>
+            <div className="flex items-center justify-between">
+              <div>
+                {lead.hiringManager.name && (
+                  <p className={`text-sm font-semibold ${
+                    lead.hiringManager.confidence === "high"
+                      ? "text-green-900"
+                      : lead.hiringManager.confidence === "medium"
+                        ? "text-blue-900"
+                        : "text-gray-800"
+                  }`}>
+                    {lead.hiringManager.name}
+                  </p>
+                )}
+                <p className={`text-xs ${lead.hiringManager.name ? "mt-0.5" : ""} ${
+                  lead.hiringManager.confidence === "high"
+                    ? "text-green-700"
+                    : lead.hiringManager.confidence === "medium"
+                      ? "text-blue-700"
+                      : "text-gray-600"
+                }`}>
+                  {lead.hiringManager.title}
+                </p>
+                <p className={`text-[10px] mt-1 italic ${
+                  lead.hiringManager.confidence === "high"
+                    ? "text-green-500"
+                    : lead.hiringManager.confidence === "medium"
+                      ? "text-blue-500"
+                      : "text-gray-400"
+                }`}>
+                  {lead.hiringManager.source === "linkedin"
+                    ? "Found via LinkedIn"
+                    : lead.hiringManager.source === "job_description"
+                      ? "Extracted from job description"
+                      : "Inferred from role type"}
+                  {" \u00B7 "}
+                  {lead.hiringManager.confidence} confidence
+                </p>
+              </div>
+              <div>
+                {lead.hiringManager.linkedinUrl ? (
+                  <a
+                    href={lead.hiringManager.linkedinUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`p-2 rounded-lg transition-colors ${
+                      lead.hiringManager.confidence === "high"
+                        ? "text-green-600 hover:bg-green-100"
+                        : "text-blue-600 hover:bg-blue-100"
+                    }`}
+                    title="View LinkedIn profile"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                  </a>
+                ) : (
+                  <a
+                    href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(lead.hiringManager.title + " " + lead.company.name)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                    title="Search LinkedIn for this role"
+                  >
+                    <Search className="w-4 h-4" />
+                  </a>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Signals */}
         <div>

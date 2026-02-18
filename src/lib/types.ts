@@ -69,6 +69,14 @@ export interface Contact {
   confidence?: "high" | "medium" | "low";
 }
 
+export interface HiringManager {
+  title: string;                                       // e.g. "VP of Revenue Operations"
+  name?: string;                                       // if known (from LinkedIn)
+  linkedinUrl?: string;                                // if known (from LinkedIn)
+  confidence: "high" | "medium" | "low";
+  source: "linkedin" | "job_description" | "inferred"; // how we found them
+}
+
 export interface Lead {
   id: string;
   company: Company;
@@ -76,6 +84,7 @@ export interface Lead {
   signals: Signal[];
   triggerEvent: string; // human-readable summary
   contacts: Contact[];
+  hiringManager?: HiringManager; // likely person/role who owns the hiring decision
   firstDetected: string; // ISO date
   lastUpdated: string; // ISO date
   status: "new" | "reviewed" | "contacted" | "dismissed";

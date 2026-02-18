@@ -1,4 +1,4 @@
-import { Lead, Signal, Company, Contact } from "./types";
+import { Lead, Signal, Company, Contact, HiringManager } from "./types";
 import { computeLeadScore, generateTriggerEvent } from "./scoring";
 import { ScrapedJob } from "./scraper";
 import { batchValidateCompanyUrls, batchEnrichEmployeeCounts, batchLookupContacts, safeLinkedInUrl, safeCompanySearchUrl, extractEmployeeCountFromText, extractReportingManager, getLastEnrichmentStats } from "./data-integrity";
@@ -170,13 +170,21 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
     const now = new Date().toISOString();
     const detectedAt = Number.isFinite(detectedTime) ? job.detectedAt : now;
 
+    const builtContacts = buildContacts(companyId, companyKey, contactResults, reportingManagers);
+    const hiringManager = inferHiringManager(
+      job.title,
+      builtContacts,
+      reportingManagers.get(companyKey),
+    );
+
     leads.push({
       id: `lead-${companyId}`,
       company,
       score,
       signals,
       triggerEvent,
-      contacts: buildContacts(companyId, companyKey, contactResults, reportingManagers),
+      contacts: builtContacts,
+      hiringManager,
       firstDetected: detectedAt,
       lastUpdated: detectedAt,
       status: "new",
@@ -347,6 +355,100 @@ function buildContacts(
   }
 
   return [];
+}
+
+// ── Hiring Manager Inference ─────────────────────────────────────────
+// Combines three tiers of evidence to identify the most likely hiring
+// manager for a Salesforce role.  All inputs are data we already have —
+// no extra API calls.
+//
+// Tier 1: LinkedIn contact scored as a decision-maker (highest confidence)
+// Tier 2: JD "reports to" extraction (medium confidence)
+// Tier 3: Title-based inference from the job title (low confidence)
+
+// Maps common Salesforce job titles to the roles that typically own the
+// hiring decision.  Used only when tiers 1 & 2 produce nothing.
+const HIRING_MANAGER_INFERENCE: Array<{ match: RegExp; titles: string[] }> = [
+  {
+    match: /salesforce\s*(admin|administrator)/i,
+    titles: ["VP of Revenue Operations", "Director of Business Systems", "VP of IT"],
+  },
+  {
+    match: /salesforce\s*(developer|engineer)/i,
+    titles: ["Director of Salesforce Engineering", "VP of Business Systems", "CTO"],
+  },
+  {
+    match: /salesforce\s*(architect)/i,
+    titles: ["VP of Engineering", "CTO", "Director of Enterprise Architecture"],
+  },
+  {
+    match: /salesforce\s*(consultant|specialist|analyst)/i,
+    titles: ["Director of CRM", "VP of Sales Operations", "Head of Business Systems"],
+  },
+  {
+    match: /crm\s*(admin|administrator|manager|specialist)/i,
+    titles: ["VP of Revenue Operations", "Director of Sales Operations", "CIO"],
+  },
+  {
+    match: /revenue\s*operations/i,
+    titles: ["VP of Revenue Operations", "CRO", "VP of Sales"],
+  },
+  {
+    match: /business\s*systems/i,
+    titles: ["VP of IT", "CIO", "Director of Business Systems"],
+  },
+];
+
+function inferHiringManager(
+  jobTitle: string,
+  contacts: Contact[],
+  reportingManager: { title: string; confidence: "high" | "medium" | "low" } | undefined,
+): HiringManager | undefined {
+  // Tier 1: LinkedIn-found decision maker (highest confidence).
+  // Pick the first high-confidence contact, or the first medium one.
+  const highConfidence = contacts.find((c) => c.confidence === "high");
+  if (highConfidence) {
+    return {
+      title: highConfidence.title,
+      name: highConfidence.name,
+      linkedinUrl: highConfidence.linkedinUrl || undefined,
+      confidence: "high",
+      source: "linkedin",
+    };
+  }
+
+  const mediumConfidence = contacts.find((c) => c.confidence === "medium");
+  if (mediumConfidence) {
+    return {
+      title: mediumConfidence.title,
+      name: mediumConfidence.name,
+      linkedinUrl: mediumConfidence.linkedinUrl || undefined,
+      confidence: "medium",
+      source: "linkedin",
+    };
+  }
+
+  // Tier 2: JD "reports to" extraction (medium confidence).
+  if (reportingManager) {
+    return {
+      title: reportingManager.title,
+      confidence: reportingManager.confidence,
+      source: "job_description",
+    };
+  }
+
+  // Tier 3: Title-based inference (low confidence — educated guess).
+  for (const { match, titles } of HIRING_MANAGER_INFERENCE) {
+    if (match.test(jobTitle)) {
+      return {
+        title: titles[0],
+        confidence: "low",
+        source: "inferred",
+      };
+    }
+  }
+
+  return undefined;
 }
 
 function inferIndustry(jobs: ScrapedJob[]): string {
