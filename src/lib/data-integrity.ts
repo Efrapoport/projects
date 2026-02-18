@@ -372,8 +372,8 @@ export async function batchEnrichEmployeeCounts(
 
   const timer = log.time("employee-enrichment");
   const results = new Map<string, number>();
-  const MAX_LOOKUPS = 15; // Limit API calls per run
-  const CONCURRENCY = 3;
+  const MAX_LOOKUPS = 5; // Keep low — each call uses 1 SerpAPI search (free tier: 100/month)
+  const CONCURRENCY = 2;
 
   // Deduplicate and limit
   const unique = new Map<string, string>(); // normalized → original
@@ -760,8 +760,8 @@ export async function batchLookupContacts(
   const timer = log.time("contact-lookup");
   const contacts = new Map<string, LookedUpContact[]>();
   const employeeCounts = new Map<string, number>();
-  const MAX_LOOKUPS = 15;
-  const CONCURRENCY = 3;
+  const MAX_LOOKUPS = 5; // Keep low — each call uses 1-2 SerpAPI searches (free tier: 100/month)
+  const CONCURRENCY = 2;
 
   // Deduplicate
   const unique = new Map<string, string>();

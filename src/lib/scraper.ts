@@ -1352,7 +1352,8 @@ export async function scrapeJobs(
 }
 
 // ── Health Check ────────────────────────────────────────────────────
-// Probes each data source independently to report which are reachable.
+// Lightweight connectivity probes — does NOT run the full scrapers,
+// so it consumes ZERO SerpAPI quota.  Tests reachability only.
 
 export interface SourceHealthResult {
   name: string;
@@ -1363,95 +1364,99 @@ export interface SourceHealthResult {
   details?: string;
 }
 
+/** Lightweight HEAD/GET probe — just checks if the host is reachable. */
+async function probeUrl(url: string, timeoutMs = 6000): Promise<{ ok: boolean; status: number; ms: number }> {
+  const start = Date.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, {
+      method: "HEAD",
+      signal: controller.signal,
+      redirect: "follow",
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; HealthCheck/1.0)" },
+    });
+    clearTimeout(timeout);
+    return { ok: resp.status < 400, status: resp.status, ms: Date.now() - start };
+  } catch {
+    clearTimeout(timeout);
+    return { ok: false, status: 0, ms: Date.now() - start };
+  }
+}
+
 export async function checkSourceHealth(): Promise<{
   sources: SourceHealthResult[];
   storeSize: number;
   cacheAge: number | null;
 }> {
-  const sources: Array<{ name: string; fn: () => Promise<ScrapedJob[]>; requiresKey?: boolean }> = [
-    { name: "RemoteOK", fn: fetchRemoteOK },
-    { name: "Arbeitnow", fn: fetchArbeitnow },
-    { name: "Jobicy", fn: fetchJobicy },
-    { name: "Himalayas", fn: fetchHimalayas },
-    { name: "Google Jobs", fn: fetchGoogleJobs, requiresKey: true },
-    { name: "Indeed", fn: fetchIndeed },
+  // Lightweight probes — just test if each host is reachable.
+  // Does NOT call the actual scrapers (which would burn SerpAPI quota).
+  const probes: Array<{ name: string; url: string; requiresKey?: boolean }> = [
+    { name: "RemoteOK", url: "https://remoteok.com/api?tag=salesforce&api=1" },
+    { name: "Arbeitnow", url: "https://www.arbeitnow.com/api/job-board-api" },
+    { name: "Jobicy", url: "https://jobicy.com/api/v2/remote-jobs" },
+    { name: "Himalayas", url: "https://himalayas.app/jobs/api" },
+    { name: "Google Jobs (SerpAPI)", url: "https://serpapi.com/account.json", requiresKey: true },
+    { name: "EarnBetter", url: "https://earnbetter.com/" },
+    { name: "Indeed", url: "https://www.indeed.com/" },
   ];
 
-  // EarnBetter has 3 sub-strategies — probe each one separately
-  const earnbetterProbe = async (): Promise<SourceHealthResult> => {
-    const start = Date.now();
-    const subResults: string[] = [];
-    let totalJobs = 0;
-
-    // Strategy 1: Direct scrape
-    try {
-      const direct = await earnbetterStrategy1_DirectScrape();
-      subResults.push(`Direct scrape: ${direct.length} jobs`);
-      totalJobs += direct.length;
-    } catch (err) {
-      subResults.push(`Direct scrape: failed (${String(err).slice(0, 80)})`);
-    }
-
-    // Strategy 2: Google Web
-    if (process.env.SERPAPI_KEY) {
-      try {
-        const web = await earnbetterStrategy2_GoogleWeb();
-        subResults.push(`Google Web: ${web.length} jobs`);
-        totalJobs += web.length;
-      } catch (err) {
-        subResults.push(`Google Web: failed (${String(err).slice(0, 80)})`);
+  const results = await Promise.allSettled(
+    probes.map(async (probe): Promise<SourceHealthResult> => {
+      if (probe.requiresKey && !process.env.SERPAPI_KEY) {
+        return { name: probe.name, status: "skipped", latencyMs: 0, jobCount: 0, error: "No SERPAPI_KEY" };
       }
-    } else {
-      subResults.push("Google Web: skipped (no SERPAPI_KEY)");
-    }
 
-    // Strategy 3: Google Jobs
-    if (process.env.SERPAPI_KEY) {
-      try {
-        const gj = await earnbetterStrategy3_GoogleJobs();
-        subResults.push(`Google Jobs: ${gj.length} jobs`);
-        totalJobs += gj.length;
-      } catch (err) {
-        subResults.push(`Google Jobs: failed (${String(err).slice(0, 80)})`);
+      // For SerpAPI, use the account endpoint to check quota (free, no search cost)
+      const url = probe.requiresKey
+        ? `${probe.url}?api_key=${process.env.SERPAPI_KEY}`
+        : probe.url;
+
+      const { ok, status, ms } = await probeUrl(url);
+
+      if (!ok) {
+        return {
+          name: probe.name,
+          status: "error",
+          latencyMs: ms,
+          jobCount: 0,
+          error: status > 0 ? `HTTP ${status}` : "Unreachable (network blocked or timeout)",
+        };
       }
-    } else {
-      subResults.push("Google Jobs: skipped (no SERPAPI_KEY)");
-    }
 
-    const latency = Date.now() - start;
-    const status = totalJobs > 0 ? "ok" : "warn";
-    return {
-      name: "EarnBetter",
-      status,
-      latencyMs: latency,
-      jobCount: totalJobs,
-      details: subResults.join(" | "),
-      ...(totalJobs === 0 && { error: "All 3 strategies returned 0 jobs" }),
-    };
-  };
-
-  const results = await Promise.allSettled([
-    ...sources.map(async (src): Promise<SourceHealthResult> => {
-      if (src.requiresKey && !process.env.SERPAPI_KEY) {
-        return { name: src.name, status: "skipped", latencyMs: 0, jobCount: 0, error: "No SERPAPI_KEY" };
+      // For SerpAPI, try to parse remaining quota from account endpoint
+      let details: string | undefined;
+      if (probe.requiresKey) {
+        try {
+          const resp = await fetch(url, { headers: { Accept: "application/json" } });
+          if (resp.ok) {
+            const acct = (await resp.json()) as Record<string, unknown>;
+            const remaining = acct.total_searches_left ?? acct.plan_searches_left;
+            const used = acct.this_month_usage ?? acct.total_searches_used;
+            if (remaining !== undefined) {
+              details = `${remaining} searches remaining this month (${used ?? "?"} used)`;
+            }
+          }
+        } catch { /* ignore — the probe already passed */ }
       }
-      const start = Date.now();
-      try {
-        const jobs = await src.fn();
-        const latency = Date.now() - start;
-        // Ran successfully but returned 0 results → warn
-        if (jobs.length === 0) {
-          return { name: src.name, status: "warn", latencyMs: latency, jobCount: 0, error: "Returned 0 results" };
-        }
-        return { name: src.name, status: "ok", latencyMs: latency, jobCount: jobs.length };
-      } catch (err) {
-        return { name: src.name, status: "error", latencyMs: Date.now() - start, jobCount: 0, error: String(err) };
-      }
-    }),
-    earnbetterProbe(),
-  ]);
 
-  // Also include bundled data status
+      // Pull last-known job count from the store (keyed by source)
+      const sourceKey = probe.name.toLowerCase().replace(/[^a-z]/g, "");
+      const storeJobs = Array.from(jobStore.values()).filter((j) =>
+        j.source.toLowerCase().replace(/[^a-z]/g, "").includes(sourceKey)
+      ).length;
+
+      return {
+        name: probe.name,
+        status: storeJobs > 0 ? "ok" : "warn",
+        latencyMs: ms,
+        jobCount: storeJobs,
+        details: details || (storeJobs > 0 ? `${storeJobs} jobs in store from previous scrapes` : "Reachable, but 0 jobs in store — try refreshing"),
+      };
+    })
+  );
+
+  // Bundled data
   const bundled = loadBundledJobs();
   const sourceResults: SourceHealthResult[] = results.map((r) =>
     r.status === "fulfilled" ? r.value : { name: "Unknown", status: "error" as const, latencyMs: 0, jobCount: 0, error: String(r.reason) }
@@ -1461,6 +1466,7 @@ export async function checkSourceHealth(): Promise<{
     status: bundled.length > 0 ? "ok" : "error",
     latencyMs: 0,
     jobCount: bundled.length,
+    details: `${bundled.length} pre-loaded Salesforce job postings`,
   });
 
   return {
