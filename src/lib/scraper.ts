@@ -1221,6 +1221,96 @@ function pushJobPosting(
   }
 }
 
+// ── Source 8: Greenhouse ATS Watchlist ────────────────────────────────
+// Many companies post jobs through Greenhouse, which exposes a free
+// public JSON API at boards-api.greenhouse.io.  We maintain a watchlist
+// of company board tokens and poll their open roles for Salesforce-
+// related titles.  This catches postings at the source — before they
+// get indexed by Google Jobs or any aggregator.
+
+const GREENHOUSE_WATCHLIST = [
+  "anthropic",
+  "figma",
+  "notion",
+  "stripe",
+  "airtable",
+  "retool",
+  "rippling",
+  "gusto",
+  "brex",
+  "ramp",
+  "plaid",
+  "mongodb",
+  "datadog",
+  "verkada",
+  "anduril",
+  "openai",
+  "scale",
+  "databricks",
+];
+
+async function fetchGreenhouseWatchlist(): Promise<ScrapedJob[]> {
+  const timer = log.time("greenhouse");
+  const allJobs: ScrapedJob[] = [];
+
+  const results = await Promise.allSettled(
+    GREENHOUSE_WATCHLIST.map(async (boardToken) => {
+      try {
+        const data = (await fetchJSON(
+          `https://boards-api.greenhouse.io/v1/boards/${boardToken}/jobs?content=true`,
+          15000
+        )) as { jobs?: Record<string, unknown>[] };
+
+        const jobs = data?.jobs || [];
+        const matched: ScrapedJob[] = [];
+
+        for (const job of jobs) {
+          const title = String(job.title || "").trim();
+          const content = String(job.content || "");
+          const combined = `${title} ${content}`.toLowerCase();
+
+          // Quick relevance check: must mention salesforce/sfdc somewhere
+          if (!combined.includes("salesforce") && !combined.includes("sfdc")) {
+            continue;
+          }
+
+          const loc = job.location as Record<string, unknown> | undefined;
+          const locationName = String(loc?.name || "");
+          const updatedAt = String(job.updated_at || "");
+
+          matched.push({
+            title,
+            company: boardToken.charAt(0).toUpperCase() + boardToken.slice(1),
+            location: locationName,
+            description: stripHTML(content).slice(0, 1000),
+            url: String(job.absolute_url || `https://boards.greenhouse.io/${boardToken}/jobs/${job.id}`),
+            source: "greenhouse",
+            detectedAt: updatedAt || new Date().toISOString(),
+          });
+        }
+
+        if (matched.length > 0) {
+          log.info(`Greenhouse [${boardToken}]`, { total: jobs.length, matched: matched.length });
+        }
+
+        return matched;
+      } catch (error) {
+        log.debug(`Greenhouse [${boardToken}] failed`, { error: String(error) });
+        return [];
+      }
+    })
+  );
+
+  for (const result of results) {
+    if (result.status === "fulfilled") {
+      allJobs.push(...result.value);
+    }
+  }
+
+  timer.end(`Greenhouse watchlist`, { companies: GREENHOUSE_WATCHLIST.length, matched: allJobs.length });
+  return allJobs;
+}
+
 // ── Bundled data loader ─────────────────────────────────────────────
 // Loads pre-scraped real job data from bundled file.
 // Used as primary source when live API calls are blocked by network proxy.
@@ -1347,9 +1437,10 @@ export async function scrapeJobs(
     fetchGoogleJobs(),
     fetchEarnBetter(),
     fetchIndeed(),
+    fetchGreenhouseWatchlist(),
   ]);
 
-  const sourceNames = ["RemoteOK", "Arbeitnow", "Jobicy", "Himalayas", "Google Jobs", "EarnBetter", "Indeed"];
+  const sourceNames = ["RemoteOK", "Arbeitnow", "Jobicy", "Himalayas", "Google Jobs", "EarnBetter", "Indeed", "Greenhouse"];
   const allJobs: ScrapedJob[] = [];
   const sourceCounts: Record<string, number> = {};
 
@@ -1525,6 +1616,16 @@ export async function checkSourceHealth(): Promise<{
       url: "https://www.indeed.com/",
       storeSourceKey: "indeed",
       mode: "probe-only",
+    },
+    {
+      name: "Greenhouse",
+      url: "https://boards-api.greenhouse.io/v1/boards/anthropic/jobs",
+      storeSourceKey: "greenhouse",
+      mode: "fetch-json",
+      countFn: (data) => {
+        const d = data as Record<string, unknown>;
+        return Array.isArray(d?.jobs) ? d.jobs.length : 0;
+      },
     },
   ];
 
