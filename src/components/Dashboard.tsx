@@ -308,7 +308,7 @@ export function Dashboard({ initialData }: DashboardProps) {
             {/* Signal Insight Panel (Side Peek) */}
             {selectedLead && (
               <div className="w-[420px] flex-shrink-0">
-                <div className="sticky top-[65px]">
+                <div className="sticky top-[65px] max-h-[calc(100vh-80px)] overflow-hidden flex flex-col">
                   <SignalPanel
                     lead={selectedLead}
                     onClose={() => setSelectedLeadId(null)}
