@@ -8,6 +8,7 @@ import { LeadTable } from "./LeadTable";
 import { SignalPanel } from "./SignalPanel";
 import { StatsBar } from "./StatsBar";
 import { RefreshCw, Cloud, Mail, AlertTriangle, Loader2 } from "lucide-react";
+import { HealthCheckButton } from "./HealthCheck";
 
 interface ApiResponse {
   leads: Lead[];
@@ -156,6 +157,7 @@ export function Dashboard({ initialData }: DashboardProps) {
                   })}
                 </span>
               )}
+              <HealthCheckButton />
               <button
                 onClick={() => fetchLeads(true)}
                 disabled={loading}

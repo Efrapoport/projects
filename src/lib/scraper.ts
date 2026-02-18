@@ -17,11 +17,49 @@ export interface ScrapedJob {
   detectedAt: string;
 }
 
-// ── In-Memory Cache ─────────────────────────────────────────────────
+// ── In-Memory Cache + Persistent Accumulator ────────────────────────
+// Instead of replacing the job list on every scrape, we ACCUMULATE
+// jobs across scrapes so that leads don't disappear when an API is
+// temporarily down or returns different results.  Jobs expire after
+// JOB_MAX_AGE_MS (30 days) to keep the dataset from growing forever.
 
 let cachedJobs: ScrapedJob[] | null = null;
 let cacheTimestamp = 0;
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+
+const jobStore = new Map<string, ScrapedJob & { lastSeen: number }>();
+const JOB_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+function jobStoreKey(job: ScrapedJob): string {
+  return `${job.company.toLowerCase().trim()}|${job.title.toLowerCase().trim()}`;
+}
+
+/** Merge freshly scraped jobs into the persistent store, then return all non-expired jobs. */
+function mergeIntoStore(freshJobs: ScrapedJob[]): ScrapedJob[] {
+  const now = Date.now();
+
+  // Upsert fresh jobs
+  for (const job of freshJobs) {
+    const key = jobStoreKey(job);
+    const existing = jobStore.get(key);
+    if (existing) {
+      // Keep the earlier detectedAt but update lastSeen
+      existing.lastSeen = now;
+    } else {
+      jobStore.set(key, { ...job, lastSeen: now });
+    }
+  }
+
+  // Evict expired jobs (not seen in any scrape for 30 days)
+  for (const [key, entry] of jobStore) {
+    if (now - entry.lastSeen > JOB_MAX_AGE_MS) {
+      jobStore.delete(key);
+    }
+  }
+
+  // Return all live jobs (strip the lastSeen field)
+  return Array.from(jobStore.values()).map(({ lastSeen: _, ...job }) => job);
+}
 
 // ── Shared fetch helper ─────────────────────────────────────────────
 
@@ -1261,17 +1299,14 @@ export async function scrapeJobs(
     log.info("Merging live + bundled data", { live: liveCount, bundled: bundled.length });
   }
 
-  // Deduplicate by company + title (case-insensitive)
-  const seen = new Set<string>();
-  const unique = allJobs.filter((job) => {
-    const key = `${job.company.toLowerCase().trim()}|${job.title.toLowerCase().trim()}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  // ── Accumulate into persistent store ────────────────────────────
+  // Instead of replacing the dataset, merge fresh jobs with previously
+  // seen ones.  This prevents leads from vanishing when a source is
+  // temporarily down or returns different results between scrapes.
+  const accumulated = mergeIntoStore(allJobs);
 
   // Filter: only keep jobs where Salesforce is a PRIMARY requirement
-  const relevant = unique.filter((job) => {
+  const relevant = accumulated.filter((job) => {
     const pass = isSalesforcePrimaryRole(job);
     if (!pass) {
       log.debug(`Rejected (not primary SF role)`, {
@@ -1284,10 +1319,11 @@ export async function scrapeJobs(
 
   timer.end("Scrape complete", {
     sources: sourceCounts,
-    total: allJobs.length,
-    unique: unique.length,
+    freshJobs: allJobs.length,
+    accumulated: accumulated.length,
     relevant: relevant.length,
-    filtered: unique.length - relevant.length,
+    filtered: accumulated.length - relevant.length,
+    storeSize: jobStore.size,
   });
 
   // Cache results
@@ -1297,6 +1333,66 @@ export async function scrapeJobs(
   }
 
   return relevant;
+}
+
+// ── Health Check ────────────────────────────────────────────────────
+// Probes each data source independently to report which are reachable.
+
+export interface SourceHealthResult {
+  name: string;
+  status: "ok" | "error" | "skipped";
+  latencyMs: number;
+  jobCount: number;
+  error?: string;
+}
+
+export async function checkSourceHealth(): Promise<{
+  sources: SourceHealthResult[];
+  storeSize: number;
+  cacheAge: number | null;
+}> {
+  const sources: Array<{ name: string; fn: () => Promise<ScrapedJob[]>; requiresKey?: boolean }> = [
+    { name: "RemoteOK", fn: fetchRemoteOK },
+    { name: "Arbeitnow", fn: fetchArbeitnow },
+    { name: "Jobicy", fn: fetchJobicy },
+    { name: "Himalayas", fn: fetchHimalayas },
+    { name: "Google Jobs", fn: fetchGoogleJobs, requiresKey: true },
+    { name: "EarnBetter", fn: fetchEarnBetter },
+    { name: "Indeed", fn: fetchIndeed },
+  ];
+
+  const results = await Promise.allSettled(
+    sources.map(async (src): Promise<SourceHealthResult> => {
+      if (src.requiresKey && !process.env.SERPAPI_KEY) {
+        return { name: src.name, status: "skipped", latencyMs: 0, jobCount: 0, error: "No SERPAPI_KEY" };
+      }
+      const start = Date.now();
+      try {
+        const jobs = await src.fn();
+        return { name: src.name, status: "ok", latencyMs: Date.now() - start, jobCount: jobs.length };
+      } catch (err) {
+        return { name: src.name, status: "error", latencyMs: Date.now() - start, jobCount: 0, error: String(err) };
+      }
+    })
+  );
+
+  // Also include bundled data status
+  const bundled = loadBundledJobs();
+  const sourceResults: SourceHealthResult[] = results.map((r) =>
+    r.status === "fulfilled" ? r.value : { name: "Unknown", status: "error" as const, latencyMs: 0, jobCount: 0, error: String(r.reason) }
+  );
+  sourceResults.push({
+    name: "Bundled Data",
+    status: bundled.length > 0 ? "ok" : "error",
+    latencyMs: 0,
+    jobCount: bundled.length,
+  });
+
+  return {
+    sources: sourceResults,
+    storeSize: jobStore.size,
+    cacheAge: cachedJobs ? Date.now() - cacheTimestamp : null,
+  };
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
