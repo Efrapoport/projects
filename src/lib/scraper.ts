@@ -1221,14 +1221,16 @@ function pushJobPosting(
   }
 }
 
-// ── Source 8: Greenhouse ATS Watchlist ────────────────────────────────
-// Many companies post jobs through Greenhouse, which exposes a free
-// public JSON API at boards-api.greenhouse.io.  We maintain a watchlist
-// of company board tokens and poll their open roles for Salesforce-
-// related titles.  This catches postings at the source — before they
-// get indexed by Google Jobs or any aggregator.
+// ── Source 8: Greenhouse ATS (Auto-Discovery) ────────────────────────
+// Instead of maintaining a manual company list, we AUTO-DISCOVER
+// Greenhouse boards by extracting company names from jobs found by
+// other sources, normalising them into candidate board tokens, and
+// probing the free Greenhouse API.  Discovered boards are cached
+// in-memory so we only probe each company once.
 
-const GREENHOUSE_WATCHLIST = [
+// Seed tokens – a small set we know use Greenhouse, so we don't have
+// to wait for other sources to discover them.
+const GREENHOUSE_SEEDS = [
   "anthropic",
   "figma",
   "notion",
@@ -1249,12 +1251,148 @@ const GREENHOUSE_WATCHLIST = [
   "databricks",
 ];
 
-async function fetchGreenhouseWatchlist(): Promise<ScrapedJob[]> {
+// Registry tracks which tokens we've probed and whether they're valid.
+// Persists in module-level memory (survives within a single serverless
+// invocation's hot start; cold starts re-seed from GREENHOUSE_SEEDS).
+interface BoardEntry {
+  token: string;
+  valid: boolean;         // true = board exists and returned jobs
+  companyName: string;    // original company name
+  checkedAt: number;      // timestamp of last probe
+}
+const greenhouseRegistry = new Map<string, BoardEntry>();
+const PROBE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // re-probe after 7 days
+
+// ── Company name → candidate board tokens ──────────────────────────
+// Greenhouse board tokens are typically the company name slugified:
+// "MongoDB" → "mongodb", "Data Dog" → "datadog", "Scale AI" → "scaleai"
+// We generate multiple candidates and probe each one.
+
+function companyToBoardTokens(name: string): string[] {
+  const cleaned = name
+    .toLowerCase()
+    .replace(/[,.]?\s*(inc\.?|llc|ltd|co\.?|corp\.?|limited|gmbh|plc)$/i, "")
+    .trim();
+
+  const tokens = new Set<string>();
+
+  // Variant 1: all non-alphanumeric stripped → "datadog"
+  tokens.add(cleaned.replace(/[^a-z0-9]/g, ""));
+
+  // Variant 2: spaces/hyphens → hyphens → "data-dog"
+  tokens.add(cleaned.replace(/[^a-z0-9-]/g, "").replace(/--+/g, "-"));
+
+  // Variant 3: just the first word → "data" (for "Data Dog, Inc.")
+  const firstWord = cleaned.split(/[^a-z0-9]/)[0];
+  if (firstWord && firstWord.length >= 3) {
+    tokens.add(firstWord);
+  }
+
+  // Remove empty strings
+  tokens.delete("");
+
+  return Array.from(tokens);
+}
+
+// ── Probe a single board token ─────────────────────────────────────
+async function probeGreenhouseBoard(token: string, companyName: string): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `https://boards-api.greenhouse.io/v1/boards/${token}/jobs`,
+      {
+        signal: AbortSignal.timeout(5000),
+        headers: { Accept: "application/json" },
+      }
+    );
+    if (!response.ok) return false;
+    const data = (await response.json()) as { jobs?: unknown[] };
+    return Array.isArray(data?.jobs) && data.jobs.length > 0;
+  } catch {
+    log.debug(`Greenhouse probe failed: ${token} (${companyName})`);
+    return false;
+  }
+}
+
+// ── Discover boards from a list of company names ───────────────────
+// Called after other sources have returned jobs.  Extracts unique
+// company names, generates candidate tokens, and probes any we
+// haven't seen (or haven't checked in > PROBE_TTL_MS).
+
+async function discoverGreenhouseBoards(companyNames: string[]): Promise<string[]> {
+  const timer = log.time("greenhouse-discover");
+  const now = Date.now();
+
+  // Deduplicate & generate candidates
+  const seen = new Set<string>();
+  const toProbe: { token: string; company: string }[] = [];
+
+  for (const name of companyNames) {
+    const candidates = companyToBoardTokens(name);
+    for (const token of candidates) {
+      if (seen.has(token)) continue;
+      seen.add(token);
+
+      const existing = greenhouseRegistry.get(token);
+      if (existing && now - existing.checkedAt < PROBE_TTL_MS) continue;
+
+      toProbe.push({ token, company: name });
+    }
+  }
+
+  if (toProbe.length === 0) {
+    timer.end("No new tokens to probe");
+    return getValidTokens();
+  }
+
+  // Probe in batches of 10 to avoid hammering the API
+  const BATCH = 10;
+  let discovered = 0;
+
+  for (let i = 0; i < toProbe.length; i += BATCH) {
+    const batch = toProbe.slice(i, i + BATCH);
+    const results = await Promise.allSettled(
+      batch.map(async ({ token, company }) => {
+        const valid = await probeGreenhouseBoard(token, company);
+        greenhouseRegistry.set(token, { token, valid, companyName: company, checkedAt: now });
+        if (valid) discovered++;
+        return valid;
+      })
+    );
+
+    // Log batch results
+    const successes = results.filter(r => r.status === "fulfilled" && r.value).length;
+    if (successes > 0) {
+      log.info(`Greenhouse discovery batch ${Math.floor(i / BATCH) + 1}`, {
+        probed: batch.length,
+        found: successes,
+      });
+    }
+  }
+
+  timer.end("Discovery complete", {
+    probed: toProbe.length,
+    newBoards: discovered,
+    totalValid: getValidTokens().length,
+  });
+
+  return getValidTokens();
+}
+
+function getValidTokens(): string[] {
+  const tokens = new Set<string>(GREENHOUSE_SEEDS);
+  for (const [token, entry] of greenhouseRegistry) {
+    if (entry.valid) tokens.add(token);
+  }
+  return Array.from(tokens);
+}
+
+// ── Fetch jobs from a list of board tokens ─────────────────────────
+async function fetchGreenhouseBoards(boardTokens: string[]): Promise<ScrapedJob[]> {
   const timer = log.time("greenhouse");
   const allJobs: ScrapedJob[] = [];
 
   const results = await Promise.allSettled(
-    GREENHOUSE_WATCHLIST.map(async (boardToken) => {
+    boardTokens.map(async (boardToken) => {
       try {
         const data = (await fetchJSON(
           `https://boards-api.greenhouse.io/v1/boards/${boardToken}/jobs?content=true`,
@@ -1307,7 +1445,7 @@ async function fetchGreenhouseWatchlist(): Promise<ScrapedJob[]> {
     }
   }
 
-  timer.end(`Greenhouse watchlist`, { companies: GREENHOUSE_WATCHLIST.length, matched: allJobs.length });
+  timer.end(`Greenhouse`, { boards: boardTokens.length, matched: allJobs.length });
   return allJobs;
 }
 
@@ -1428,8 +1566,8 @@ export async function scrapeJobs(
   const timer = log.time("scrape-all");
   log.info("Starting multi-source job scrape");
 
-  // Run ALL live sources in parallel (including EarnBetter)
-  const results = await Promise.allSettled([
+  // Phase 1: Run non-Greenhouse live sources in parallel
+  const phase1Results = await Promise.allSettled([
     fetchRemoteOK(),
     fetchArbeitnow(),
     fetchJobicy(),
@@ -1437,21 +1575,30 @@ export async function scrapeJobs(
     fetchGoogleJobs(),
     fetchEarnBetter(),
     fetchIndeed(),
-    fetchGreenhouseWatchlist(),
   ]);
 
-  const sourceNames = ["RemoteOK", "Arbeitnow", "Jobicy", "Himalayas", "Google Jobs", "EarnBetter", "Indeed", "Greenhouse"];
+  const phase1Names = ["RemoteOK", "Arbeitnow", "Jobicy", "Himalayas", "Google Jobs", "EarnBetter", "Indeed"];
   const allJobs: ScrapedJob[] = [];
   const sourceCounts: Record<string, number> = {};
 
-  results.forEach((result, i) => {
+  phase1Results.forEach((result, i) => {
     if (result.status === "fulfilled" && result.value.length > 0) {
       allJobs.push(...result.value);
-      sourceCounts[sourceNames[i]] = result.value.length;
+      sourceCounts[phase1Names[i]] = result.value.length;
     } else if (result.status === "rejected") {
-      log.warn(`${sourceNames[i]} rejected`, { error: String(result.reason) });
+      log.warn(`${phase1Names[i]} rejected`, { error: String(result.reason) });
     }
   });
+
+  // Phase 2: Auto-discover Greenhouse boards from companies found above,
+  // then fetch Salesforce jobs from all known boards (seeds + discovered).
+  const companyNames = [...new Set(allJobs.map((j) => j.company))];
+  const boardTokens = await discoverGreenhouseBoards(companyNames);
+  const greenhouseJobs = await fetchGreenhouseBoards(boardTokens);
+  if (greenhouseJobs.length > 0) {
+    allJobs.push(...greenhouseJobs);
+    sourceCounts["Greenhouse"] = greenhouseJobs.length;
+  }
 
   // ALWAYS merge bundled data so we have a solid baseline even when
   // live APIs return partial results.  Dedup below handles overlaps.
