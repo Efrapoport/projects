@@ -436,11 +436,26 @@ async function fetchEarnBetter(): Promise<ScrapedJob[]> {
     });
   }
 
+  // For remaining unknowns, derive a company name from the URL or title
+  // instead of silently dropping them (which caused 0-result issues).
+  for (const job of allJobs) {
+    if (job.company.includes("Unknown")) {
+      // Try to extract from URL slug: /app/job/ULID/company-name-title
+      const slugMatch = job.url?.match(/earnbetter\.com\/app\/job\/[A-Z0-9]+\/([a-z0-9-]+)/i);
+      if (slugMatch) {
+        const words = slugMatch[1].split("-").slice(0, 3).join(" ");
+        if (words.length > 2) {
+          job.company = words.split(" ").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+        }
+      }
+    }
+  }
+
   // Dedup by URL first (most reliable), then by company+title
   const seen = new Set<string>();
   const unique = allJobs.filter((j) => {
-    // Skip jobs that still have unknown company — they add no value
-    if (j.company.includes("Unknown")) return false;
+    // Still skip if truly unresolvable (no URL, no title clue)
+    if (j.company.includes("Unknown") && !j.url) return false;
 
     const urlKey = j.url ? j.url.replace(/\/$/, "") : "";
     if (urlKey && seen.has(urlKey)) return false;
@@ -453,11 +468,12 @@ async function fetchEarnBetter(): Promise<ScrapedJob[]> {
     return true;
   });
 
+  const stillUnknown = unique.filter((j) => j.company.includes("Unknown")).length;
   timer.end("EarnBetter merged", {
     total: allJobs.length,
     unique: unique.length,
     unknownsResolved: unknowns.filter((j) => !j.company.includes("Unknown")).length,
-    unknownsRemaining: unknowns.filter((j) => j.company.includes("Unknown")).length,
+    unknownsRemaining: stillUnknown,
   });
 
   return unique;
@@ -596,7 +612,7 @@ async function earnbetterStrategy3_GoogleJobs(): Promise<ScrapedJob[]> {
         engine: "google_jobs",
         q,
         api_key: apiKey,
-        chips: "date_posted:week",
+        chips: "date_posted:month",
       });
 
       const data = (await fetchJSON(
