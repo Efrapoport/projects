@@ -140,9 +140,10 @@ function daysSince(isoDate: string): number {
 }
 
 function formatTimeAgo(isoDate: string): string {
-  const hours = Math.floor(
-    (Date.now() - new Date(isoDate).getTime()) / (1000 * 60 * 60)
-  );
+  if (!isoDate) return "date unknown";
+  const ms = Date.now() - new Date(isoDate).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "date unknown";
+  const hours = Math.floor(ms / (1000 * 60 * 60));
   if (hours < 1) return "just now";
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);

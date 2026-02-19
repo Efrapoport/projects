@@ -167,8 +167,9 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
     const triggerEvent = generateTriggerEvent(signals);
 
     const detectedTime = new Date(job.detectedAt).getTime();
-    const now = new Date().toISOString();
-    const detectedAt = Number.isFinite(detectedTime) ? job.detectedAt : now;
+    // If the source didn't provide a valid date, leave it empty rather
+    // than faking "just now".  The UI will show "unknown" instead.
+    const detectedAt = (Number.isFinite(detectedTime) && job.detectedAt) ? job.detectedAt : "";
 
     const builtContacts = buildContacts(companyId, companyKey, contactResults, reportingManagers);
     const hiringManager = inferHiringManager(

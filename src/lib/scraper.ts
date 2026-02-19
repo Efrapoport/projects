@@ -212,7 +212,7 @@ async function fetchArbeitnow(): Promise<ScrapedJob[]> {
           ? String(item.url)
           : `https://www.arbeitnow.com/${item.slug || ""}`,
         source: "arbeitnow",
-        detectedAt: String(item.created_at || new Date().toISOString()),
+        detectedAt: String(item.created_at || ""),
       });
     }
 
@@ -250,7 +250,7 @@ async function fetchJobicy(): Promise<ScrapedJob[]> {
         description: stripHTML(String(item.jobExcerpt || "")),
         url: String(item.url || ""),
         source: "jobicy",
-        detectedAt: String(item.pubDate || new Date().toISOString()),
+        detectedAt: String(item.pubDate || ""),
       });
     }
 
@@ -288,7 +288,7 @@ async function fetchHimalayas(): Promise<ScrapedJob[]> {
         description: stripHTML(String(item.excerpt || item.description || "")),
         url: String(item.url || item.applicationLink || ""),
         source: "himalayas",
-        detectedAt: String(item.pubDate || new Date().toISOString()),
+        detectedAt: String(item.pubDate || ""),
       });
     }
 
@@ -632,6 +632,9 @@ async function earnbetterStrategy2_GoogleWeb(): Promise<ScrapedJob[]> {
         // Try to extract company from snippet — multiple patterns
         const company = extractCompanyFromSnippet(snippetText);
 
+        // Google organic results sometimes include a date in the snippet
+        const dateFromSnippet = extractDateFromText(snippetText);
+
         jobs.push({
           title: jobTitle,
           company: company || "Unknown (via EarnBetter)",
@@ -639,7 +642,7 @@ async function earnbetterStrategy2_GoogleWeb(): Promise<ScrapedJob[]> {
           description: stripHTML(snippetText).slice(0, 500),
           url: link,
           source: "earnbetter",
-          detectedAt: new Date().toISOString(),
+          detectedAt: dateFromSnippet,
         });
       }
 
@@ -881,7 +884,7 @@ function parseEarnBetterHTML(html: string): ScrapedJob[] {
                 description: stripHTML(String(job.description || job.snippet || job.summary || "")),
                 url: job.url || job.applyUrl || job.link || "",
                 source: "earnbetter",
-                detectedAt: String(job.postedAt || job.createdAt || job.datePosted || new Date().toISOString()),
+                detectedAt: String(job.postedAt || job.createdAt || job.datePosted || ""),
               });
             }
           }
@@ -916,7 +919,7 @@ function parseEarnBetterHTML(html: string): ScrapedJob[] {
               description: stripHTML(String(item.description || "")),
               url: String(item.url || ""),
               source: "earnbetter",
-              detectedAt: String(item.datePosted || new Date().toISOString()),
+              detectedAt: String(item.datePosted || ""),
             });
           }
         }
@@ -936,7 +939,7 @@ function parseEarnBetterHTML(html: string): ScrapedJob[] {
                   description: stripHTML(String(posting.description || "")),
                   url: String(posting.url || ""),
                   source: "earnbetter",
-                  detectedAt: String(posting.datePosted || new Date().toISOString()),
+                  detectedAt: String(posting.datePosted || ""),
                 });
               }
             }
@@ -976,7 +979,7 @@ function parseEarnBetterHTML(html: string): ScrapedJob[] {
         description: container.find("[class*='description'], [class*='snippet']").first().text().trim(),
         url: fullUrl,
         source: "earnbetter",
-        detectedAt: new Date().toISOString(),
+        detectedAt: "",
       });
     }
   });
@@ -984,13 +987,30 @@ function parseEarnBetterHTML(html: string): ScrapedJob[] {
   return jobs;
 }
 
-/** Convert relative time strings like "3 days ago" to ISO dates */
+/** Convert relative time strings like "3 days ago" to ISO dates.
+ *  Returns empty string when the date cannot be determined — callers
+ *  should treat empty as "unknown age" rather than "just now". */
 function postedAtToISO(postedAt: string): string {
-  if (!postedAt) return new Date().toISOString();
+  if (!postedAt) return "";
 
   const now = Date.now();
+
+  // Handle "30+ days ago" or "30+ days" patterns
+  const plusMatch = postedAt.match(/(\d+)\+\s*(hour|day|week|month)/i);
+  if (plusMatch) {
+    const amount = parseInt(plusMatch[1], 10);
+    const unit = plusMatch[2].toLowerCase();
+    const ms: Record<string, number> = {
+      hour: 60 * 60 * 1000,
+      day: 24 * 60 * 60 * 1000,
+      week: 7 * 24 * 60 * 60 * 1000,
+      month: 30 * 24 * 60 * 60 * 1000,
+    };
+    return new Date(now - amount * (ms[unit] || 0)).toISOString();
+  }
+
   const match = postedAt.match(/(\d+)\s*(hour|day|week|month)/i);
-  if (!match) return new Date().toISOString();
+  if (!match) return "";
 
   const amount = parseInt(match[1], 10);
   const unit = match[2].toLowerCase();
@@ -1093,7 +1113,7 @@ function parseIndeedHTML(html: string): ScrapedJob[] {
                     ? `https://www.indeed.com/viewjob?jk=${result.jobkey}`
                     : "",
                   source: "indeed",
-                  detectedAt: result.pubDate || new Date().toISOString(),
+                  detectedAt: result.pubDate || "",
                 });
               }
             }
@@ -1155,7 +1175,7 @@ function parseIndeedHTML(html: string): ScrapedJob[] {
             ? `https://www.indeed.com/viewjob?jk=${jobKey}`
             : "",
           source: "indeed",
-          detectedAt: new Date().toISOString(),
+          detectedAt: "",
         });
       }
     });
@@ -1423,7 +1443,7 @@ async function fetchGreenhouseBoards(boardTokens: string[]): Promise<ScrapedJob[
             description: stripHTML(content).slice(0, 1000),
             url: String(job.absolute_url || `https://boards.greenhouse.io/${boardToken}/jobs/${job.id}`),
             source: "greenhouse",
-            detectedAt: updatedAt || new Date().toISOString(),
+            detectedAt: updatedAt || "",
           });
         }
 
@@ -1899,6 +1919,33 @@ export async function checkSourceHealth(): Promise<{
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
+
+/** Try to extract a posting date from free text (snippets, descriptions).
+ *  Returns an ISO string if found, empty string if not. */
+function extractDateFromText(text: string): string {
+  if (!text) return "";
+
+  // Relative: "30+ days ago", "3 days ago", "2 weeks ago"
+  const relative = text.match(/(\d+\+?)\s*(hour|day|week|month)s?\s*ago/i);
+  if (relative) return postedAtToISO(relative[0]);
+
+  // Absolute: "Jan 15, 2026", "January 15, 2026", "2026-01-15"
+  const absolute = text.match(
+    /(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}/i
+  );
+  if (absolute) {
+    const d = new Date(absolute[0]);
+    if (Number.isFinite(d.getTime())) return d.toISOString();
+  }
+
+  const iso = text.match(/\d{4}-\d{2}-\d{2}/);
+  if (iso) {
+    const d = new Date(iso[0]);
+    if (Number.isFinite(d.getTime())) return d.toISOString();
+  }
+
+  return "";
+}
 
 function stripHTML(text: string): string {
   return text
