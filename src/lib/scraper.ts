@@ -45,7 +45,7 @@ function jobStoreKey(job: ScrapedJob): string {
 // data and the dashboard is never empty on first load.
 (function seedStore() {
   const now = Date.now();
-  const bundled = SCRAPED_JOBS.map((r: ScrapedJobRecord) => ({
+  const bundled = SCRAPED_JOBS.map((r: ScrapedJobRecord) => ensureDetectedAt({
     title: r.title,
     company: r.company,
     location: r.location,
@@ -62,12 +62,23 @@ function jobStoreKey(job: ScrapedJob): string {
   }
 })();
 
+/** Ensure every job has a valid detectedAt timestamp.
+ *  If a scraper didn't provide one (or provided an invalid date),
+ *  fall back to "now" — we just detected the job, so that's accurate. */
+function ensureDetectedAt(job: ScrapedJob): ScrapedJob {
+  if (job.detectedAt && !isNaN(new Date(job.detectedAt).getTime())) {
+    return job;
+  }
+  return { ...job, detectedAt: new Date().toISOString() };
+}
+
 /** Merge freshly scraped jobs into the persistent store, then return all non-expired jobs. */
 function mergeIntoStore(freshJobs: ScrapedJob[]): ScrapedJob[] {
   const now = Date.now();
 
-  // Upsert fresh jobs
-  for (const job of freshJobs) {
+  // Upsert fresh jobs (normalise detectedAt so no job is invisible)
+  for (const rawJob of freshJobs) {
+    const job = ensureDetectedAt(rawJob);
     const key = jobStoreKey(job);
     const existing = jobStore.get(key);
     if (existing) {
@@ -187,7 +198,7 @@ async function fetchJSON(url: string, timeoutMs = 15000): Promise<unknown> {
 async function fetchRemoteOK(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
   const timer = log.time("remoteok");
-  const tags = ["salesforce", "crm", "salesforce-admin"];
+  const tags = ["salesforce", "crm", "salesforce-admin", "sfdc", "salesforce-developer"];
   const seenUrls = new Set<string>();
 
   for (const tag of tags) {
@@ -236,7 +247,7 @@ async function fetchRemoteOK(): Promise<ScrapedJob[]> {
 async function fetchArbeitnow(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
   const timer = log.time("arbeitnow");
-  const queries = ["salesforce", "salesforce admin", "CRM administrator"];
+  const queries = ["salesforce", "salesforce admin", "CRM administrator", "salesforce developer", "SFDC"];
   const seenUrls = new Set<string>();
 
   for (const query of queries) {
@@ -282,7 +293,7 @@ async function fetchArbeitnow(): Promise<ScrapedJob[]> {
 async function fetchJobicy(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
   const timer = log.time("jobicy");
-  const queries = ["salesforce", "salesforce admin", "CRM"];
+  const queries = ["salesforce", "salesforce admin", "CRM", "salesforce developer", "SFDC"];
   const seenUrls = new Set<string>();
 
   for (const query of queries) {
@@ -326,7 +337,7 @@ async function fetchJobicy(): Promise<ScrapedJob[]> {
 async function fetchHimalayas(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
   const timer = log.time("himalayas");
-  const queries = ["salesforce", "salesforce admin", "CRM administrator"];
+  const queries = ["salesforce", "salesforce admin", "CRM administrator", "salesforce developer", "SFDC"];
   const seenUrls = new Set<string>();
 
   for (const query of queries) {
@@ -1095,7 +1106,7 @@ function postedAtToISO(postedAt: string): string {
 async function fetchIndeed(): Promise<ScrapedJob[]> {
   const allJobs: ScrapedJob[] = [];
   const timer = log.time("indeed");
-  const queries = ["salesforce administrator", "first salesforce admin", "salesforce admin", "CRM administrator salesforce"];
+  const queries = ["salesforce administrator", "first salesforce admin", "salesforce admin", "CRM administrator salesforce", "salesforce developer", "SFDC administrator"];
 
   for (const query of queries) {
     try {
@@ -1316,6 +1327,7 @@ function pushJobPosting(
 // Seed tokens – a small set we know use Greenhouse, so we don't have
 // to wait for other sources to discover them.
 const GREENHOUSE_SEEDS = [
+  // Original tech companies
   "anthropic",
   "figma",
   "notion",
@@ -1334,6 +1346,56 @@ const GREENHOUSE_SEEDS = [
   "openai",
   "scale",
   "databricks",
+  // Companies known to hire Salesforce admins/developers
+  "vanta",
+  "logicgate",
+  "restaurant365",
+  "getbuilt",
+  "newsela",
+  "blink-health",
+  "blinkhealth",
+  "smartsheet",
+  "sproutsocial",
+  "sprout-social",
+  "goCardless",
+  "gocardless",
+  "pushpay",
+  "filevine",
+  "knowbe4",
+  "labcorp",
+  "comscore",
+  "lumivero",
+  "calero",
+  "openlane",
+  "varonis",
+  // Large enterprises with Salesforce-heavy ops
+  "twilio",
+  "hubspot",
+  "docusign",
+  "okta",
+  "zendesk",
+  "toast",
+  "gitlab",
+  "elastic",
+  "snyk",
+  "amplitude",
+  "contentful",
+  "webflow",
+  "navan",
+  "drata",
+  "gong",
+  "outreach",
+  "salesloft",
+  "clari",
+  "highspot",
+  "seismic",
+  "conga",
+  "veeva",
+  "netsuite",
+  "zuora",
+  "chargebee",
+  "ironclad",
+  "icertis",
 ];
 
 // Registry tracks which tokens we've probed and whether they're valid.
