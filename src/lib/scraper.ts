@@ -25,13 +25,18 @@ export interface ScrapedJob {
 
 let cachedJobs: ScrapedJob[] | null = null;
 let cacheTimestamp = 0;
-const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes — shorter so live data shows up faster
 
 const jobStore = new Map<string, ScrapedJob & { lastSeen: number }>();
 const JOB_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 function jobStoreKey(job: ScrapedJob): string {
-  return `${job.company.toLowerCase().trim()}|${job.title.toLowerCase().trim()}`;
+  // Include location so that the same role in different cities isn't deduped.
+  // Include URL when available — it's the most reliable unique identifier.
+  const base = `${job.company.toLowerCase().trim()}|${job.title.toLowerCase().trim()}`;
+  if (job.url) return `${base}|${job.url}`;
+  const loc = (job.location || "").toLowerCase().trim();
+  return loc ? `${base}|${loc}` : base;
 }
 
 // ── Pre-seed store with bundled data on cold start ─────────────────
@@ -82,6 +87,40 @@ function mergeIntoStore(freshJobs: ScrapedJob[]): ScrapedJob[] {
 
   // Return all live jobs (strip the lastSeen field)
   return Array.from(jobStore.values()).map(({ lastSeen: _, ...job }) => job);
+}
+
+// ── Source Failure Tracking ──────────────────────────────────────────
+// Track per-source failures so the health endpoint and API can report
+// which scrapers are broken instead of silently returning empty arrays.
+
+interface SourceFailure {
+  source: string;
+  error: string;
+  at: number;      // timestamp
+  consecutive: number;  // how many times in a row this source failed
+}
+
+const sourceFailures = new Map<string, SourceFailure>();
+const sourceLastSuccess = new Map<string, { at: number; count: number }>();
+
+function recordSourceFailure(source: string, error: string): void {
+  const prev = sourceFailures.get(source);
+  sourceFailures.set(source, {
+    source,
+    error,
+    at: Date.now(),
+    consecutive: prev ? prev.consecutive + 1 : 1,
+  });
+  log.warn(`${source} failed (${(prev?.consecutive ?? 0) + 1} consecutive)`, { error });
+}
+
+function recordSourceSuccess(source: string, count: number): void {
+  sourceFailures.delete(source);
+  sourceLastSuccess.set(source, { at: Date.now(), count });
+}
+
+export function getSourceFailures(): SourceFailure[] {
+  return Array.from(sourceFailures.values());
 }
 
 // ── SerpAPI Quota Tracking ───────────────────────────────────────────
@@ -148,39 +187,47 @@ async function fetchJSON(url: string, timeoutMs = 15000): Promise<unknown> {
 async function fetchRemoteOK(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
   const timer = log.time("remoteok");
+  const tags = ["salesforce", "crm", "salesforce-admin"];
+  const seenUrls = new Set<string>();
 
-  try {
-    const data = await fetchJSON(
-      "https://remoteok.com/api?tag=salesforce&api=1"
-    );
+  for (const tag of tags) {
+    try {
+      const data = await fetchJSON(
+        `https://remoteok.com/api?tag=${encodeURIComponent(tag)}&api=1`
+      );
 
-    if (!Array.isArray(data)) return [];
+      if (!Array.isArray(data)) continue;
 
-    for (let i = 1; i < data.length; i++) {
-      const item = data[i] as Record<string, unknown>;
-      const company = String(item.company || "").trim();
-      const title = String(item.position || "").trim();
+      for (let i = 1; i < data.length; i++) {
+        const item = data[i] as Record<string, unknown>;
+        const company = String(item.company || "").trim();
+        const title = String(item.position || "").trim();
+        const url = String(item.url || `https://remoteok.com/remote-jobs/${item.id || ""}`);
 
-      if (!company || !title) continue;
+        if (!company || !title) continue;
+        if (seenUrls.has(url)) continue;
+        seenUrls.add(url);
 
-      jobs.push({
-        title,
-        company,
-        location: String(item.location || "Remote"),
-        description: stripHTML(String(item.description || "")),
-        url: String(item.url || `https://remoteok.com/remote-jobs/${item.id || ""}`),
-        source: "remoteok",
-        detectedAt: item.date
-          ? String(item.date)
-          : new Date((item.epoch as number) * 1000 || Date.now()).toISOString(),
-      });
+        jobs.push({
+          title,
+          company,
+          location: String(item.location || "Remote"),
+          description: stripHTML(String(item.description || "")),
+          url,
+          source: "remoteok",
+          detectedAt: item.date
+            ? String(item.date)
+            : item.epoch
+              ? new Date((item.epoch as number) * 1000).toISOString()
+              : "",
+        });
+      }
+    } catch (error) {
+      log.warn(`RemoteOK tag "${tag}" failed`, { error: String(error) });
     }
-
-    timer.end(`Found ${jobs.length} jobs`, { count: jobs.length });
-  } catch (error) {
-    log.warn("RemoteOK failed", { error: String(error) });
   }
 
+  timer.end(`Found ${jobs.length} jobs`, { count: jobs.length });
   return jobs;
 }
 
@@ -189,38 +236,44 @@ async function fetchRemoteOK(): Promise<ScrapedJob[]> {
 async function fetchArbeitnow(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
   const timer = log.time("arbeitnow");
+  const queries = ["salesforce", "salesforce admin", "CRM administrator"];
+  const seenUrls = new Set<string>();
 
-  try {
-    const data = (await fetchJSON(
-      "https://www.arbeitnow.com/api/job-board-api?search=salesforce"
-    )) as Record<string, unknown>;
+  for (const query of queries) {
+    try {
+      const data = (await fetchJSON(
+        `https://www.arbeitnow.com/api/job-board-api?search=${encodeURIComponent(query)}`
+      )) as Record<string, unknown>;
 
-    const items = (data?.data || []) as Record<string, unknown>[];
+      const items = (data?.data || []) as Record<string, unknown>[];
 
-    for (const item of items) {
-      const company = String(item.company_name || "").trim();
-      const title = String(item.title || "").trim();
-
-      if (!company || !title) continue;
-
-      jobs.push({
-        title,
-        company,
-        location: String(item.location || (item.remote ? "Remote" : "")),
-        description: stripHTML(String(item.description || "")),
-        url: item.url
+      for (const item of items) {
+        const company = String(item.company_name || "").trim();
+        const title = String(item.title || "").trim();
+        const url = item.url
           ? String(item.url)
-          : `https://www.arbeitnow.com/${item.slug || ""}`,
-        source: "arbeitnow",
-        detectedAt: String(item.created_at || ""),
-      });
-    }
+          : `https://www.arbeitnow.com/${item.slug || ""}`;
 
-    timer.end(`Found ${jobs.length} jobs`, { count: jobs.length });
-  } catch (error) {
-    log.warn("Arbeitnow failed", { error: String(error) });
+        if (!company || !title) continue;
+        if (seenUrls.has(url)) continue;
+        seenUrls.add(url);
+
+        jobs.push({
+          title,
+          company,
+          location: String(item.location || (item.remote ? "Remote" : "")),
+          description: stripHTML(String(item.description || "")),
+          url,
+          source: "arbeitnow",
+          detectedAt: String(item.created_at || ""),
+        });
+      }
+    } catch (error) {
+      log.warn(`Arbeitnow query "${query}" failed`, { error: String(error) });
+    }
   }
 
+  timer.end(`Found ${jobs.length} jobs`, { count: jobs.length });
   return jobs;
 }
 
@@ -229,36 +282,42 @@ async function fetchArbeitnow(): Promise<ScrapedJob[]> {
 async function fetchJobicy(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
   const timer = log.time("jobicy");
+  const queries = ["salesforce", "salesforce admin", "CRM"];
+  const seenUrls = new Set<string>();
 
-  try {
-    const data = (await fetchJSON(
-      "https://jobicy.com/api/v2/remote-jobs?tag=salesforce&count=50"
-    )) as Record<string, unknown>;
+  for (const query of queries) {
+    try {
+      const data = (await fetchJSON(
+        `https://jobicy.com/api/v2/remote-jobs?tag=${encodeURIComponent(query)}&count=50`
+      )) as Record<string, unknown>;
 
-    const items = (data?.jobs || []) as Record<string, unknown>[];
+      const items = (data?.jobs || []) as Record<string, unknown>[];
 
-    for (const item of items) {
-      const company = String(item.companyName || "").trim();
-      const title = String(item.jobTitle || "").trim();
+      for (const item of items) {
+        const company = String(item.companyName || "").trim();
+        const title = String(item.jobTitle || "").trim();
+        const url = String(item.url || "");
 
-      if (!company || !title) continue;
+        if (!company || !title) continue;
+        if (url && seenUrls.has(url)) continue;
+        if (url) seenUrls.add(url);
 
-      jobs.push({
-        title,
-        company,
-        location: String(item.jobGeo || "Remote"),
-        description: stripHTML(String(item.jobExcerpt || "")),
-        url: String(item.url || ""),
-        source: "jobicy",
-        detectedAt: String(item.pubDate || ""),
-      });
+        jobs.push({
+          title,
+          company,
+          location: String(item.jobGeo || "Remote"),
+          description: stripHTML(String(item.jobExcerpt || "")),
+          url,
+          source: "jobicy",
+          detectedAt: String(item.pubDate || ""),
+        });
+      }
+    } catch (error) {
+      log.warn(`Jobicy query "${query}" failed`, { error: String(error) });
     }
-
-    timer.end(`Found ${jobs.length} jobs`, { count: jobs.length });
-  } catch (error) {
-    log.warn("Jobicy failed", { error: String(error) });
   }
 
+  timer.end(`Found ${jobs.length} jobs`, { count: jobs.length });
   return jobs;
 }
 
@@ -267,36 +326,42 @@ async function fetchJobicy(): Promise<ScrapedJob[]> {
 async function fetchHimalayas(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
   const timer = log.time("himalayas");
+  const queries = ["salesforce", "salesforce admin", "CRM administrator"];
+  const seenUrls = new Set<string>();
 
-  try {
-    const data = (await fetchJSON(
-      "https://himalayas.app/jobs/api?q=salesforce&limit=50"
-    )) as Record<string, unknown>;
+  for (const query of queries) {
+    try {
+      const data = (await fetchJSON(
+        `https://himalayas.app/jobs/api?q=${encodeURIComponent(query)}&limit=50`
+      )) as Record<string, unknown>;
 
-    const items = (data?.jobs || []) as Record<string, unknown>[];
+      const items = (data?.jobs || []) as Record<string, unknown>[];
 
-    for (const item of items) {
-      const company = String(item.companyName || "").trim();
-      const title = String(item.title || "").trim();
+      for (const item of items) {
+        const company = String(item.companyName || "").trim();
+        const title = String(item.title || "").trim();
+        const url = String(item.url || item.applicationLink || "");
 
-      if (!company || !title) continue;
+        if (!company || !title) continue;
+        if (url && seenUrls.has(url)) continue;
+        if (url) seenUrls.add(url);
 
-      jobs.push({
-        title,
-        company,
-        location: String(item.location || "Remote"),
-        description: stripHTML(String(item.excerpt || item.description || "")),
-        url: String(item.url || item.applicationLink || ""),
-        source: "himalayas",
-        detectedAt: String(item.pubDate || ""),
-      });
+        jobs.push({
+          title,
+          company,
+          location: String(item.location || "Remote"),
+          description: stripHTML(String(item.excerpt || item.description || "")),
+          url,
+          source: "himalayas",
+          detectedAt: String(item.pubDate || ""),
+        });
+      }
+    } catch (error) {
+      log.warn(`Himalayas query "${query}" failed`, { error: String(error) });
     }
-
-    timer.end(`Found ${jobs.length} jobs`, { count: jobs.length });
-  } catch (error) {
-    log.warn("Himalayas failed", { error: String(error) });
   }
 
+  timer.end(`Found ${jobs.length} jobs`, { count: jobs.length });
   return jobs;
 }
 
@@ -1602,11 +1667,16 @@ export async function scrapeJobs(
   const sourceCounts: Record<string, number> = {};
 
   phase1Results.forEach((result, i) => {
+    const name = phase1Names[i];
     if (result.status === "fulfilled" && result.value.length > 0) {
       allJobs.push(...result.value);
-      sourceCounts[phase1Names[i]] = result.value.length;
+      sourceCounts[name] = result.value.length;
+      recordSourceSuccess(name, result.value.length);
     } else if (result.status === "rejected") {
-      log.warn(`${phase1Names[i]} rejected`, { error: String(result.reason) });
+      recordSourceFailure(name, String(result.reason));
+    } else if (result.status === "fulfilled" && result.value.length === 0) {
+      // Source succeeded but returned 0 jobs — could be legitimate or a silent failure
+      recordSourceFailure(name, "Returned 0 jobs");
     }
   });
 
@@ -1614,23 +1684,29 @@ export async function scrapeJobs(
   // then fetch Salesforce jobs from all known boards (seeds + discovered).
   const companyNames = [...new Set(allJobs.map((j) => j.company))];
   const boardTokens = await discoverGreenhouseBoards(companyNames);
-  const greenhouseJobs = await fetchGreenhouseBoards(boardTokens);
+  let greenhouseJobs: ScrapedJob[] = [];
+  try {
+    greenhouseJobs = await fetchGreenhouseBoards(boardTokens);
+  } catch (err) {
+    recordSourceFailure("Greenhouse", String(err));
+  }
   if (greenhouseJobs.length > 0) {
     allJobs.push(...greenhouseJobs);
     sourceCounts["Greenhouse"] = greenhouseJobs.length;
+    recordSourceSuccess("Greenhouse", greenhouseJobs.length);
   }
 
-  // ALWAYS merge bundled data so we have a solid baseline even when
-  // live APIs return partial results.  Dedup below handles overlaps.
-  const bundled = loadBundledJobs();
+  // Only fall back to bundled data when live APIs produced nothing.
+  // When live APIs succeed, their results should stand on their own so
+  // stale bundled postings don't drown out fresh discoveries.
   const liveCount = allJobs.length;
-  allJobs.push(...bundled);
-  sourceCounts["bundled"] = bundled.length;
-
   if (liveCount === 0) {
-    log.info("Live APIs returned 0 — using bundled data only", { bundled: bundled.length });
+    const bundled = loadBundledJobs();
+    allJobs.push(...bundled);
+    sourceCounts["bundled"] = bundled.length;
+    log.info("Live APIs returned 0 — falling back to bundled data", { bundled: bundled.length });
   } else {
-    log.info("Merging live + bundled data", { live: liveCount, bundled: bundled.length });
+    log.info("Using live data", { live: liveCount });
   }
 
   // ── Accumulate into persistent store ────────────────────────────
@@ -1714,6 +1790,7 @@ export async function checkSourceHealth(): Promise<{
   sources: SourceHealthResult[];
   storeSize: number;
   cacheAge: number | null;
+  scraperFailures?: SourceFailure[];
   serpApiQuota: { exhausted: boolean; error: string | null; detectedAt: number | null };
 }> {
   // For free APIs, actually fetch data to verify they return results.
@@ -1910,10 +1987,14 @@ export async function checkSourceHealth(): Promise<{
     details: `${bundled.length} pre-loaded Salesforce job postings`,
   });
 
+  // Include scraper failure info so the health check surfaces problems
+  const failures = getSourceFailures();
+
   return {
     sources: sourceResults,
     storeSize: jobStore.size,
     cacheAge: cachedJobs ? Date.now() - cacheTimestamp : null,
+    scraperFailures: failures.length > 0 ? failures : undefined,
     serpApiQuota: getSerpApiQuotaStatus(),
   };
 }

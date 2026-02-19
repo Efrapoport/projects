@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { scrapeJobs, getSerpApiQuotaStatus } from "@/lib/scraper";
+import { scrapeJobs, getSerpApiQuotaStatus, getSourceFailures } from "@/lib/scraper";
 import { buildLeadsFromJobs, getIndustriesFromLeads } from "@/lib/lead-builder";
 import { getLastEnrichmentStats } from "@/lib/data-integrity";
 import { createLogger } from "@/lib/logger";
@@ -41,10 +41,9 @@ export async function GET(request: NextRequest) {
 
     // Detect if data came from bundled fallback
     if (scrapedJobs.length > 0) {
-      const hasBundledOnly = scrapedJobs.every(
-        (j) => !["remoteok", "arbeitnow", "jobicy", "himalayas", "indeed", "earnbetter"].includes(j.source) === false
-      );
-      dataSource = hasBundledOnly ? "live" : "bundled";
+      const liveSources = ["remoteok", "arbeitnow", "jobicy", "himalayas", "indeed", "earnbetter", "greenhouse", "google_jobs"];
+      const hasLiveData = scrapedJobs.some((j) => liveSources.includes(j.source));
+      dataSource = hasLiveData ? "live" : "bundled";
     }
 
     // Strip signal.raw (full JD) from response — client only needs the extracted snippets
@@ -66,11 +65,17 @@ export async function GET(request: NextRequest) {
       sourceBreakdown,
     });
 
-    // Check if SerpAPI quota is exhausted — surface as a warning
+    // Surface scraper issues as warnings so the client can show them
     const quotaStatus = getSerpApiQuotaStatus();
+    const failures = getSourceFailures();
     const warnings: string[] = [];
     if (quotaStatus.exhausted) {
       warnings.push(quotaStatus.error || "SerpAPI quota exhausted — Google Jobs, EarnBetter, contacts, and employee data unavailable");
+    }
+    for (const f of failures) {
+      if (f.consecutive >= 2) {
+        warnings.push(`${f.source}: failing (${f.consecutive}x) — ${f.error}`);
+      }
     }
 
     // Include enrichment stats for transparency
