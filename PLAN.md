@@ -1,18 +1,60 @@
 # Investor Relationship Feature — Implementation Plan
 
 ## Overview
-For every company/lead in the dashboard, show whether it has a relationship
-to one of the user's tracked investors. Relationships include funding,
-board seats, and portfolio overlap with other leads.
+For every company/lead in the dashboard, show whether it has a funding
+relationship to one of the user's tracked investors.
 
 Data is mock/sample for now — designed so real APIs (Crunchbase, etc.) can
 be plugged in later.
 
 ---
 
-## 1. Data Model (types.ts)
+## Relationship Definition
 
-Add these new interfaces:
+A **"relationship"** in this system means:
+
+> An investor participated in a **funding round** for the company.
+
+This is the only relationship type tracked today: `type: "funding"`.
+
+### What counts as a funding relationship
+
+A funding relationship is established when an investor is listed as a
+participant (lead or co-investor) in a company's equity financing round
+(Seed, Series A, Series B, growth equity, take-private, etc.).
+
+Examples:
+- "Sequoia Capital **led** Vanta's Series B ($110M)" → funding, confidence: high
+- "Tiger Global **participated** in Restaurant365's Series D" → funding, confidence: medium
+- "Andreessen Horowitz rumored to have invested in early rounds" → funding, confidence: low
+
+### Confidence levels
+
+| Level    | Meaning                                                       |
+|----------|---------------------------------------------------------------|
+| **high** | Investor led the round (named lead in press release / filing) |
+| **medium** | Investor participated but did not lead                      |
+| **low**  | Investor rumored or inferred from secondary sources           |
+
+### Types NOT currently tracked
+
+The following relationship types are **not implemented** but may be
+added in the future:
+
+| Type               | Description                                          |
+|--------------------|------------------------------------------------------|
+| `board_seat`       | Investor holds a board seat at the company            |
+| `portfolio_overlap`| Investor also funded another lead in the dashboard    |
+
+These were excluded from v1 because:
+- **board_seat**: requires separate data source (proxy statements, etc.)
+- **portfolio_overlap**: naturally emerges from the funding data — if
+  Investor X funded both Company A and Company B, and both appear as
+  leads, the user will see that connection by browsing the dashboard
+
+---
+
+## 1. Data Model (types.ts)
 
 ```ts
 interface Investor {
@@ -23,7 +65,7 @@ interface Investor {
   linkedinUrl?: string;
 }
 
-type RelationshipType = "funding" | "board_seat" | "portfolio_overlap";
+type RelationshipType = "funding";
 
 interface InvestorRelationship {
   investorId: string;
@@ -34,7 +76,7 @@ interface InvestorRelationship {
 }
 ```
 
-Extend the existing `Lead` interface:
+Extends the existing `Lead` interface:
 
 ```ts
 interface Lead {
@@ -45,166 +87,98 @@ interface Lead {
 
 ---
 
-## 2. Mock Investor Data (new file: `src/lib/investor-data.ts`)
+## 2. Mock Investor Data (`src/lib/investor-data.ts`)
 
-Create a **seed catalog** of ~8-10 well-known investors with realistic
-portfolio mappings to the existing sample companies. Examples:
+A seed catalog of 8 well-known investors with realistic funding
+mappings to companies that appear in the scraped lead data.
 
-| Investor         | Connected Leads            | Relationship Types        |
-|------------------|----------------------------|---------------------------|
-| Sequoia Capital  | NovaPay, BrightEdge AI     | funding, board_seat       |
-| Accel Partners   | CloudKitchen, DataMesh     | funding                   |
-| a16z             | BrightEdge AI              | funding, portfolio_overlap|
-| Insight Partners | RetailStack, NovaPay       | funding                   |
-| ...              | ...                        | ...                       |
+| Investor            | Connected Leads                    | Confidence |
+|---------------------|------------------------------------|------------|
+| Sequoia Capital     | Vanta                              | high       |
+| Accel               | G2, GoCardless                     | high       |
+| Andreessen Horowitz | LogicGate, Blink Health            | high / low |
+| Insight Partners    | KnowBe4, Smartsheet, Sprout Social | high / med |
+| Craft Ventures      | Vanta                              | medium     |
+| ICONIQ Growth       | G2, Restaurant365, Labcorp         | medium/low |
+| Tiger Global        | Built Technologies, Restaurant365  | medium     |
+| Thoma Bravo         | Filevine, Varonis, Comscore        | med / low  |
 
-This file exports:
-- `INVESTOR_CATALOG`: Full list of known investors with portfolio data
-- `getRelationshipsForCompany(companyName, trackedInvestorIds)`: Returns
-  `InvestorRelationship[]` — only relationships involving the user's
-  tracked investors
+Exports:
+- `INVESTOR_CATALOG` — full list of known investors
+- `getRelationshipsForCompany(companyName, trackedIds)` — returns
+  `InvestorRelationship[]` filtered to the user's tracked investors
+- `countLeadsForInvestor(investorId, companyNames)` — count of leads
+  connected to an investor (for the management UI)
 
 ---
 
-## 3. User's Tracked Investor List (localStorage persistence)
+## 3. User's Tracked Investor List (localStorage)
 
-Since there's no database, store the user's selected investors in
-**localStorage** via a React context:
+**File: `src/lib/investor-context.tsx`**
 
-**New file: `src/lib/investor-context.tsx`**
-- `InvestorProvider` wraps the app
-- `useInvestors()` hook exposes:
-  - `trackedInvestors: Investor[]` — the user's current list
-  - `addInvestor(investor)` / `removeInvestor(id)`
-  - `isTracked(id): boolean`
+React context + `useInvestors()` hook:
+- `trackedInvestors: Investor[]` — the user's current list
+- `trackedIds: Set<string>` — for fast lookup
+- `addInvestor(id)` / `removeInvestor(id)` / `isTracked(id)`
 - Persists to `localStorage` key `"tracked-investors"`
-- Ships with a sensible default set (e.g. 3-4 pre-selected investors)
+- Default set: Sequoia, a16z, Insight Partners
 
 ---
 
-## 4. Lead Enrichment with Investor Data
+## 4. Client-Side Enrichment
 
-**In `src/lib/lead-builder.ts`** (or a new helper called from it):
+Investor relationship matching runs entirely **client-side** because:
+- The tracked investor list lives in localStorage (browser-only)
+- The mock data lookup is instant (in-memory map)
+- No server-side changes to `lead-builder.ts` or `scoring.ts` needed
 
-After building leads, run a pass that attaches `investorRelationships`
-to each lead by calling `getRelationshipsForCompany()`.
-
-Since investor matching is currently mock data, this is a simple
-in-memory lookup — no API calls. When real APIs are added later, this
-becomes an async enrichment step (same pattern as the existing
-`batchEnrichEmployeeCounts`).
+When real APIs are added later, enrichment would move server-side
+(same pattern as `batchEnrichEmployeeCounts`).
 
 ---
 
-## 5. Scoring Integration (scoring.ts)
+## 5. UI — Lead Table Badge (`LeadTable.tsx`)
 
-Add investor connection as a scoring signal:
-
-| Condition                           | Points |
-|-------------------------------------|--------|
-| Has funding relationship to tracked investor | +10    |
-| Has board seat connection            | +10    |
-| Has portfolio overlap with another lead | +5     |
-
-Cap still applies (max 100).
+A small amber `Handshake` badge next to the company name when the lead
+has at least one funding connection to a tracked investor:
+- Single investor: shows investor name
+- Multiple: shows "N investors"
+- Tooltip with full investor list
 
 ---
 
-## 6. UI — Lead Table Badge (`LeadTable.tsx`)
+## 6. UI — SignalPanel Investor Section (`SignalPanel.tsx`)
 
-Add a small **investor badge** on rows that have at least one investor
-relationship:
-
-- A subtle icon (e.g. Lucide `Handshake` or `Link2`) next to the
-  company name
-- Colored by strongest relationship: gold for funding/board, blue for
-  portfolio overlap
-- Tooltip on hover showing: "Connected to Sequoia Capital (Series B)"
-- If multiple investors match, show count: "2 investor connections"
-
----
-
-## 7. UI — SignalPanel Investor Section (`SignalPanel.tsx`)
-
-Add a new **"Investor Connections"** section between "Why They Are Here"
-and the signals grid:
-
-```
-┌─────────────────────────────────┐
-│  🤝 Investor Connections (2)    │
-│                                 │
-│  ┌───────────────────────────┐  │
-│  │ Sequoia Capital           │  │
-│  │ 💰 Led Series B ($28M)   │  │
-│  │ Confidence: High          │  │
-│  └───────────────────────────┘  │
-│  ┌───────────────────────────┐  │
-│  │ Insight Partners          │  │
-│  │ 📊 Portfolio overlap:     │  │
-│  │    also invested in       │  │
-│  │    RetailStack (lead #4)  │  │
-│  │ Confidence: Medium        │  │
-│  └───────────────────────────┘  │
-│                                 │
-│  No connection? [Dismiss]       │
-└─────────────────────────────────┘
-```
-
-Each card shows:
-- Investor name (+ logo if available)
-- Relationship type with details
-- Confidence badge
-- Link to investor website/LinkedIn if available
+An **"Investor Connections"** section between "Why They Are Here" and
+"Likely Hiring Manager":
+- Each connection displayed as a card with:
+  - Investor name
+  - Funding details (round, amount)
+  - Confidence badge (high/medium/low)
+  - Link to investor website
+- Only shown when the lead has connections to tracked investors
 
 ---
 
-## 8. UI — Investor Management Modal (`InvestorManager.tsx`)
+## 7. UI — Investor Management Modal (`InvestorManager.tsx`)
 
-A new component accessible from the dashboard header (button: "My
-Investors" or similar):
-
-- **Search/browse** the investor catalog
-- **Add/remove** investors to tracked list (checkbox toggle)
-- **Shows count** of leads connected to each investor
-- Simple modal or slide-over panel
-- Could also be accessed from the existing filter bar
+Accessible from the "My Investors" button in the dashboard header:
+- Search/browse the investor catalog
+- Add/remove investors via checkbox toggle
+- Shows count of leads connected to each investor
+- Centered modal with search bar
 
 ---
 
-## 9. File Change Summary
+## 8. File Change Summary
 
 | File | Action | What Changes |
 |------|--------|-------------|
 | `src/lib/types.ts` | Edit | Add `Investor`, `InvestorRelationship`, `RelationshipType`; extend `Lead` |
-| `src/lib/investor-data.ts` | **New** | Mock investor catalog + relationship lookup function |
+| `src/lib/investor-data.ts` | **New** | Mock investor catalog + relationship lookup |
 | `src/lib/investor-context.tsx` | **New** | React context for tracked investors + localStorage |
-| `src/lib/lead-builder.ts` | Edit | Attach `investorRelationships` to leads |
-| `src/lib/scoring.ts` | Edit | Add investor connection scoring weights |
-| `src/components/LeadTable.tsx` | Edit | Add investor badge column/icon |
-| `src/components/SignalPanel.tsx` | Edit | Add "Investor Connections" section |
 | `src/components/InvestorManager.tsx` | **New** | Investor list management UI |
-| `src/components/Dashboard.tsx` | Edit | Wire up InvestorProvider + "My Investors" button |
+| `src/components/LeadTable.tsx` | Edit | Add investor badge next to company name |
+| `src/components/SignalPanel.tsx` | Edit | Add "Investor Connections" section |
+| `src/components/Dashboard.tsx` | Edit | Add "My Investors" button + modal |
 | `src/app/layout.tsx` | Edit | Wrap app with InvestorProvider |
-
----
-
-## 10. Implementation Order
-
-1. **Data model** — types + mock data (no UI changes yet)
-2. **Investor context** — provider, hook, localStorage
-3. **Lead enrichment** — wire investor relationships into lead-builder
-4. **Scoring** — add investor weights
-5. **LeadTable badge** — visual indicator on rows
-6. **SignalPanel section** — detailed investor cards
-7. **InvestorManager** — add/remove investor UI
-8. **Dashboard wiring** — button, provider, final integration
-9. **Build & verify** — ensure everything compiles and renders
-
----
-
-## Open Questions
-
-- Should the filter bar support filtering leads by "has investor
-  connection"? (Can add as a follow-up)
-- Any preference on the "My Investors" button placement — header bar
-  vs. filter area?

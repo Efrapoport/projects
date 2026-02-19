@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { InvestorProvider } from "@/lib/investor-context";
 
 export const metadata: Metadata = {
   title: "Salesforce First-Admin Radar",
@@ -14,7 +15,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        <InvestorProvider>{children}</InvestorProvider>
+      </body>
     </html>
   );
 }

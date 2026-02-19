@@ -17,7 +17,12 @@ import {
   CheckCircle2,
   Search,
   UserCheck,
+  Handshake,
+  DollarSign,
 } from "lucide-react";
+import { useInvestors } from "@/lib/investor-context";
+import { getRelationshipsForCompany, INVESTOR_CATALOG } from "@/lib/investor-data";
+import type { InvestorRelationship } from "@/lib/types";
 
 interface SignalPanelProps {
   lead: Lead;
@@ -149,6 +154,66 @@ function SignalCard({ signal }: { signal: Signal }) {
   );
 }
 
+function InvestorConnectionsSection({ companyName }: { companyName: string }) {
+  const { trackedIds } = useInvestors();
+  const relationships = getRelationshipsForCompany(companyName, trackedIds);
+  if (relationships.length === 0) return null;
+
+  const investorMap = new Map(INVESTOR_CATALOG.map((inv) => [inv.id, inv]));
+
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+      <h3 className="text-xs font-semibold text-amber-800 uppercase tracking-wider mb-2 flex items-center gap-1">
+        <Handshake className="w-3.5 h-3.5" />
+        Investor Connections ({relationships.length})
+      </h3>
+      <div className="space-y-2">
+        {relationships.map((rel: InvestorRelationship) => {
+          const investor = investorMap.get(rel.investorId);
+          return (
+            <div
+              key={rel.investorId}
+              className="bg-white/70 border border-amber-200 rounded-lg p-2.5"
+            >
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-amber-900">
+                  {rel.investorName}
+                </p>
+                <span
+                  className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
+                    rel.confidence === "high"
+                      ? "bg-green-100 text-green-700"
+                      : rel.confidence === "medium"
+                        ? "bg-blue-100 text-blue-700"
+                        : "bg-gray-100 text-gray-500"
+                  }`}
+                >
+                  {rel.confidence}
+                </span>
+              </div>
+              <p className="text-xs text-amber-700 mt-1 flex items-center gap-1">
+                <DollarSign className="w-3 h-3" />
+                {rel.details}
+              </p>
+              {investor?.website && (
+                <a
+                  href={investor.website}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 mt-1.5 text-[10px] text-amber-600 hover:text-amber-800 transition-colors"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  {investor.name}
+                </a>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function SignalPanel({ lead, onClose }: SignalPanelProps) {
   // Sort signals by weight descending
   const sortedSignals = [...lead.signals].sort((a, b) => b.weight - a.weight);
@@ -220,6 +285,9 @@ export function SignalPanel({ lead, onClose }: SignalPanelProps) {
             </span>
           </div>
         </div>
+
+        {/* Investor Connections */}
+        <InvestorConnectionsSection companyName={lead.company.name} />
 
         {/* Likely Hiring Manager */}
         {lead.hiringManager && (

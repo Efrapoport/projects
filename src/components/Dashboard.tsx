@@ -7,8 +7,9 @@ import { FilterBar } from "./FilterBar";
 import { LeadTable } from "./LeadTable";
 import { SignalPanel } from "./SignalPanel";
 import { StatsBar } from "./StatsBar";
-import { RefreshCw, Cloud, Mail, AlertTriangle, Loader2 } from "lucide-react";
+import { RefreshCw, Cloud, Mail, AlertTriangle, Loader2, Handshake } from "lucide-react";
 import { HealthCheckButton } from "./HealthCheck";
+import { InvestorManager } from "./InvestorManager";
 
 interface ApiResponse {
   leads: Lead[];
@@ -35,6 +36,7 @@ export function Dashboard({ initialData }: DashboardProps) {
   const [dataSource, setDataSource] = useState<string>(initialData?.dataSource || "");
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>(initialData?.warnings || []);
+  const [showInvestorManager, setShowInvestorManager] = useState(false);
 
   // Client-side filtering — instant response when user changes timeframe/filters
   const filteredLeads = useMemo(
@@ -161,6 +163,13 @@ export function Dashboard({ initialData }: DashboardProps) {
                 </span>
               )}
               <HealthCheckButton />
+              <button
+                onClick={() => setShowInvestorManager(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-700 bg-amber-100 hover:bg-amber-200 rounded-lg transition-colors"
+              >
+                <Handshake className="w-3.5 h-3.5" />
+                My Investors
+              </button>
               <button
                 onClick={() => fetchLeads(true)}
                 disabled={loading}
@@ -319,6 +328,14 @@ export function Dashboard({ initialData }: DashboardProps) {
           </div>
         </div>
       </main>
+
+      {/* Investor Manager Modal */}
+      {showInvestorManager && (
+        <InvestorManager
+          onClose={() => setShowInvestorManager(false)}
+          companyNames={allLeads.map((l) => l.company.name)}
+        />
+      )}
     </div>
   );
 }

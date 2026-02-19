@@ -13,7 +13,10 @@ import {
   CheckCircle2,
   AlertCircle,
   UserCheck,
+  Handshake,
 } from "lucide-react";
+import { useInvestors } from "@/lib/investor-context";
+import { getRelationshipsForCompany } from "@/lib/investor-data";
 
 interface LeadTableProps {
   leads: Lead[];
@@ -65,6 +68,27 @@ function ScoreBadge({ score }: { score: number }) {
 function getUniqueSources(lead: Lead): SignalSource[] {
   const sources = new Set(lead.signals.map((s) => s.source));
   return Array.from(sources);
+}
+
+function InvestorBadge({ companyName }: { companyName: string }) {
+  const { trackedIds } = useInvestors();
+  const relationships = getRelationshipsForCompany(companyName, trackedIds);
+  if (relationships.length === 0) return null;
+
+  const label =
+    relationships.length === 1
+      ? relationships[0].investorName
+      : `${relationships.length} investors`;
+
+  return (
+    <span
+      title={`Funded by ${relationships.map((r) => r.investorName).join(", ")}`}
+      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700"
+    >
+      <Handshake className="w-3 h-3" />
+      {label}
+    </span>
+  );
 }
 
 export function LeadTable({
@@ -137,6 +161,7 @@ export function LeadTable({
                         <span className="text-sm font-semibold text-gray-900">
                           {lead.company.name}
                         </span>
+                        <InvestorBadge companyName={lead.company.name} />
                         {lead.company.websiteVerified ? (
                           <span title="Website verified">
                             <CheckCircle2 className="w-3 h-3 text-green-500" />
