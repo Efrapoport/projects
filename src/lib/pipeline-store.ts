@@ -1,4 +1,3 @@
-import { Redis } from "@upstash/redis";
 import type {
   PipelineData,
   PipelineEntry,
@@ -6,16 +5,32 @@ import type {
   PipelineUser,
 } from "./pipeline-types";
 
-const redis = new Redis({
-  url: process.env.KV_REST_API_URL!,
-  token: process.env.KV_REST_API_TOKEN!,
-});
-
 const PIPELINE_KEY = "pipeline-data";
 
+// ── Redis or in-memory storage ──────────────────────────────────────
+// Use Upstash Redis when credentials are available. Otherwise fall back
+// to a simple in-memory store so pipeline updates still work locally.
+
+const hasRedis = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
+
+let redis: import("@upstash/redis").Redis | null = null;
+if (hasRedis) {
+  const { Redis } = require("@upstash/redis") as typeof import("@upstash/redis");
+  redis = new Redis({
+    url: process.env.KV_REST_API_URL!,
+    token: process.env.KV_REST_API_TOKEN!,
+  });
+}
+
+// In-memory fallback (persists within a single server process / dev session)
+let memoryStore: PipelineData = {};
+
 export async function getAllPipelineEntries(): Promise<PipelineData> {
-  const data = await redis.get<PipelineData>(PIPELINE_KEY);
-  return data ?? {};
+  if (redis) {
+    const data = await redis.get<PipelineData>(PIPELINE_KEY);
+    return data ?? {};
+  }
+  return memoryStore;
 }
 
 export async function getPipelineEntry(
@@ -49,7 +64,12 @@ export async function updatePipelineStage(
   });
 
   data[leadId] = entry;
-  await redis.set(PIPELINE_KEY, data);
+
+  if (redis) {
+    await redis.set(PIPELINE_KEY, data);
+  } else {
+    memoryStore = data;
+  }
 
   return entry;
 }
