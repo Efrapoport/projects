@@ -1600,7 +1600,7 @@ async function fetchGreenhouseBoards(boardTokens: string[]): Promise<ScrapedJob[
 // Loads pre-scraped real job data from bundled file.
 // Used as primary source when live API calls are blocked by network proxy.
 
-function loadBundledJobs(): ScrapedJob[] {
+export function loadBundledJobs(): ScrapedJob[] {
   return SCRAPED_JOBS.map((record: ScrapedJobRecord) => ({
     title: record.title,
     company: record.company,

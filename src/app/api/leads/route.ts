@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { scrapeJobs, getSerpApiQuotaStatus, getSourceFailures } from "@/lib/scraper";
+import { scrapeJobs, getSerpApiQuotaStatus, getSourceFailures, loadBundledJobs } from "@/lib/scraper";
 import { buildLeadsFromJobs, getIndustriesFromLeads } from "@/lib/lead-builder";
 import { getLastEnrichmentStats } from "@/lib/data-integrity";
 import { createLogger } from "@/lib/logger";
@@ -30,6 +30,14 @@ export async function GET(request: NextRequest) {
       scrapeTimer.end("Scraping complete", { jobs: scrapedJobs.length });
     } catch (err) {
       log.warn("Scraper failed or timed out", { error: String(err) });
+    }
+
+    // If scraper returned nothing (timeout or all sources failed),
+    // fall back to bundled data so the dashboard is never empty.
+    if (scrapedJobs.length === 0) {
+      scrapedJobs = loadBundledJobs();
+      dataSource = "bundled";
+      log.info("Using bundled fallback in API route", { count: scrapedJobs.length });
     }
 
     // Build leads from whatever we got (now async — includes URL validation)
