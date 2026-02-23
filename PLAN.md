@@ -182,3 +182,247 @@ Accessible from the "My Investors" button in the dashboard header:
 | `src/components/SignalPanel.tsx` | Edit | Add "Investor Connections" section |
 | `src/components/Dashboard.tsx` | Edit | Add "My Investors" button + modal |
 | `src/app/layout.tsx` | Edit | Wrap app with InvestorProvider |
+
+---
+---
+
+# Contact Tracking Pipeline — Implementation Plan
+
+## Overview
+
+Add a sales pipeline to the dashboard so team members can track each lead
+through outreach stages, see who on the team moved it and when, and get help
+writing personalized LinkedIn connection messages.
+
+**Multi-user**: uses Google OAuth (NextAuth.js) so each action is attributed
+to the team member who performed it.
+
+---
+
+## Pipeline Stages
+
+```
+new → linkedin_requested → outreach_sent → meeting_scheduled → closed_won
+                                                              → closed_lost
+```
+
+| Stage                | Badge Color | Icon   | Meaning                          |
+|----------------------|-------------|--------|----------------------------------|
+| `new`                | gray        | circle | No one has touched this lead yet |
+| `linkedin_requested` | blue        | user   | LinkedIn friend request sent     |
+| `outreach_sent`      | purple      | mail   | Personal outreach message sent   |
+| `meeting_scheduled`  | amber       | handshake | Meeting is on the calendar    |
+| `closed_won`         | green       | check  | Deal closed successfully         |
+| `closed_lost`        | red         | x      | Lead did not convert             |
+
+---
+
+## 1. Authentication — Google OAuth
+
+**Library**: `next-auth` v5 (Auth.js) with Google provider.
+
+**New files**:
+- `src/app/api/auth/[...nextauth]/route.ts` — NextAuth route handler
+- `src/lib/auth.ts` — NextAuth config (Google client ID/secret from env)
+
+**Modified files**:
+- `src/app/layout.tsx` — wrap app with `<SessionProvider>`
+- `src/components/Dashboard.tsx` — show logged-in user name/avatar in header,
+  redirect to sign-in if not authenticated
+
+**Environment variables** (`.env.local`):
+```
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+NEXTAUTH_SECRET=...
+NEXTAUTH_URL=http://localhost:3000
+```
+
+User identity from Google profile: `{ name, email, image }`.
+
+---
+
+## 2. Data Model
+
+### Pipeline Types (`src/lib/pipeline-types.ts`)
+
+```ts
+type PipelineStage =
+  | "new"
+  | "linkedin_requested"
+  | "outreach_sent"
+  | "meeting_scheduled"
+  | "closed_won"
+  | "closed_lost";
+
+interface PipelineEvent {
+  stage: PipelineStage;
+  updatedBy: {
+    name: string;
+    email: string;
+  };
+  updatedAt: string;    // ISO date
+  note?: string;        // optional note from the user
+}
+
+interface PipelineEntry {
+  leadId: string;
+  currentStage: PipelineStage;
+  history: PipelineEvent[];  // ordered oldest → newest
+}
+```
+
+### Extends Lead type (`src/lib/types.ts`)
+
+No change to the Lead interface itself — pipeline data lives in a separate
+store keyed by `lead.id` and is joined client-side.
+
+---
+
+## 3. Server-Side Storage (`src/lib/pipeline-store.ts`)
+
+JSON file at `data/pipeline.json`:
+```json
+{
+  "lead-id-1": {
+    "leadId": "lead-id-1",
+    "currentStage": "outreach_sent",
+    "history": [
+      { "stage": "linkedin_requested", "updatedBy": { "name": "Jane", "email": "jane@co.com" }, "updatedAt": "2026-02-19T..." },
+      { "stage": "outreach_sent", "updatedBy": { "name": "Jane", "email": "jane@co.com" }, "updatedAt": "2026-02-21T..." }
+    ]
+  }
+}
+```
+
+Exports:
+- `getAllPipelineEntries()` — read the full map
+- `getPipelineEntry(leadId)` — single lead
+- `updatePipelineStage(leadId, stage, user, note?)` — append event + update current stage
+
+File is created automatically on first write if it doesn't exist.
+
+---
+
+## 4. API Routes (`src/app/api/pipeline/route.ts`)
+
+| Method | Purpose | Body |
+|--------|---------|------|
+| `GET`  | Fetch all pipeline data | — |
+| `POST` | Update a lead's stage | `{ leadId, stage, note? }` |
+
+POST handler reads the authenticated user from the NextAuth session and
+records their name/email in the event. Returns 401 if not logged in.
+
+---
+
+## 5. UI — Lead Table Stage Column (`LeadTable.tsx`)
+
+Add a **"Stage"** column between Score and Trigger Event:
+
+- **Color badge** showing current stage with icon (gray=New, blue=LinkedIn,
+  purple=Outreach, amber=Meeting, green=Won, red=Lost)
+- **Sub-text** below badge: `"{Name} · {date}"` from the most recent history event
+- Badge is **clickable** — opens the stage dropdown
+
+---
+
+## 6. UI — Stage Dropdown (`PipelineDropdown.tsx`)
+
+Appears as a popover anchored to the clicked badge:
+
+- Vertical list of all 6 stages, current stage highlighted with a filled circle
+- **History section** below: chronological list of past events
+  (`"Jane → LinkedIn Req (Feb 19)"`)
+- **Note input** at the bottom: optional text field
+- **[Update]** button: saves the selected stage + note via POST /api/pipeline
+- Special behavior: selecting `outreach_sent` opens the Outreach Modal instead
+
+---
+
+## 7. UI — Outreach Modal (`OutreachModal.tsx`)
+
+Compact single-column modal that appears when advancing to `outreach_sent`:
+
+```
+┌─────────────────────────────────────────────┐
+│  ✉ LinkedIn Message for {Company}      [X]  │
+│  ─────────────────────────────────────────── │
+│  To: {HiringManager.name}, {title}          │
+│  Context: {triggerEvent}                    │
+│  Score: {score} · {industry} · {size} emps  │
+│  ─────────────────────────────────────────── │
+│                                             │
+│  {editable generated message}               │
+│                                             │
+│  ─────────────────────────────────────────── │
+│  Template: [Greenfield CRM ▼]               │
+│  ─────────────────────────────────────────── │
+│  [Regenerate]  [Copy]  [Copy & Mark Sent →] │
+└─────────────────────────────────────────────┘
+```
+
+**Message generation**: Template-based (no external AI API). Templates use
+lead data to fill placeholders:
+- `{contactName}` — hiring manager or first contact name
+- `{companyName}` — company name
+- `{triggerSummary}` — short version of trigger event
+- `{industry}` — company industry
+- `{companySize}` — employee count
+
+### Templates (`src/lib/outreach-templates.ts`)
+
+| Template Name      | When to use                                   |
+|--------------------|-----------------------------------------------|
+| Greenfield CRM     | Company hiring first SF admin, no existing CRM |
+| Migration          | Company transitioning from HubSpot/spreadsheets |
+| Growth Stage       | Scaling company adding SF team members          |
+| General            | Fallback for any lead                           |
+
+Auto-selects the best template based on signal keywords.
+
+---
+
+## 8. Dashboard Integration (`Dashboard.tsx`)
+
+- Fetch pipeline data from `GET /api/pipeline` on mount (alongside leads)
+- Pass `pipelineData` map to `LeadTable`
+- Show logged-in user avatar + name in header (from NextAuth session)
+- Add sign-out option
+
+---
+
+## 9. File Change Summary
+
+| File | Action | What Changes |
+|------|--------|-------------|
+| `src/lib/pipeline-types.ts` | **New** | `PipelineStage`, `PipelineEvent`, `PipelineEntry` types |
+| `src/lib/pipeline-store.ts` | **New** | Server-side JSON read/write for pipeline data |
+| `src/lib/outreach-templates.ts` | **New** | LinkedIn message templates + auto-selection |
+| `src/lib/auth.ts` | **New** | NextAuth config with Google provider |
+| `src/app/api/auth/[...nextauth]/route.ts` | **New** | NextAuth API route handler |
+| `src/app/api/pipeline/route.ts` | **New** | GET/POST pipeline API |
+| `src/components/PipelineDropdown.tsx` | **New** | Clickable stage dropdown with history |
+| `src/components/OutreachModal.tsx` | **New** | LinkedIn message generator modal |
+| `src/lib/types.ts` | Edit | (no changes — pipeline data is separate) |
+| `src/components/LeadTable.tsx` | Edit | Add Stage column with PipelineDropdown |
+| `src/components/Dashboard.tsx` | Edit | Fetch pipeline data, show user, wire auth |
+| `src/app/layout.tsx` | Edit | Wrap with SessionProvider |
+| `package.json` | Edit | Add `next-auth` dependency |
+| `data/pipeline.json` | **New** (auto-created) | Pipeline state file |
+
+---
+
+## 10. Implementation Order
+
+1. Install `next-auth`, configure Google OAuth (`auth.ts` + route handler)
+2. Wrap layout with `SessionProvider`, add user display to Dashboard header
+3. Define pipeline types (`pipeline-types.ts`)
+4. Build server-side store (`pipeline-store.ts` + `data/pipeline.json`)
+5. Create pipeline API routes (`/api/pipeline`)
+6. Build `PipelineDropdown` component
+7. Add Stage column to `LeadTable` with clickable badges
+8. Create outreach message templates (`outreach-templates.ts`)
+9. Build `OutreachModal` component
+10. Wire outreach modal into pipeline dropdown (trigger on `outreach_sent`)
+11. Test end-to-end: sign in → change stage → generate message → copy
