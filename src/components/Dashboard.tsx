@@ -46,20 +46,22 @@ export function Dashboard({ initialData }: DashboardProps) {
   const [pipelineData, setPipelineData] = useState<PipelineData>({});
   const [outreachLead, setOutreachLead] = useState<Lead | null>(null);
 
-  // ── "New since last visit" tracking ──────────────────────────────────
-  const LAST_VISIT_KEY = "dashboard-last-visit";
+  // ── "New since last visit" tracking (per-user) ───────────────────────
+  const lastVisitKey = user?.email
+    ? `dashboard-last-visit:${user.email}`
+    : "dashboard-last-visit";
   const lastVisitRef = useRef<string | null>(null);
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [showNewBanner, setShowNewBanner] = useState(false);
 
-  // Read last-visit timestamp once on mount
+  // Read last-visit timestamp once on mount (or when user changes)
   useEffect(() => {
     try {
-      lastVisitRef.current = localStorage.getItem(LAST_VISIT_KEY);
+      lastVisitRef.current = localStorage.getItem(lastVisitKey);
     } catch {
       // storage unavailable
     }
-  }, []);
+  }, [lastVisitKey]);
 
   // When leads load/change, compute how many are new since last visit
   useEffect(() => {
@@ -77,11 +79,11 @@ export function Dashboard({ initialData }: DashboardProps) {
     }
     // Update the stored timestamp to "now" for the next visit
     try {
-      localStorage.setItem(LAST_VISIT_KEY, new Date().toISOString());
+      localStorage.setItem(lastVisitKey, new Date().toISOString());
     } catch {
       // storage unavailable
     }
-  }, [allLeads]);
+  }, [allLeads, lastVisitKey]);
 
   // Client-side filtering — instant response when user changes timeframe/filters
   const filteredLeads = useMemo(
