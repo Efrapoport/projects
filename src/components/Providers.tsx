@@ -1,12 +1,14 @@
 "use client";
 
-import { SessionProvider } from "next-auth/react";
+import { AuthProvider } from "@/lib/auth-context";
 import { InvestorProvider } from "@/lib/investor-context";
+
+const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
-    <SessionProvider>
+    <AuthProvider googleClientId={googleClientId || undefined}>
       <InvestorProvider>{children}</InvestorProvider>
-    </SessionProvider>
+    </AuthProvider>
   );
 }

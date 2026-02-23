@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback } from "react";
-import { useSession, signIn, signOut } from "next-auth/react";
+import { useAuth } from "@/lib/auth-context";
 import { Lead, Filters, DEFAULT_FILTERS } from "@/lib/types";
 import type { PipelineData, PipelineStage } from "@/lib/pipeline-types";
 import { applyFilters } from "@/lib/filters";
@@ -27,7 +27,7 @@ interface DashboardProps {
 }
 
 export function Dashboard({ initialData }: DashboardProps) {
-  const { data: session } = useSession();
+  const { user, signIn, signOut } = useAuth();
   const hasInitial = !!(initialData?.leads?.length);
 
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
@@ -105,27 +105,32 @@ export function Dashboard({ initialData }: DashboardProps) {
 
   const handleUpdatePipelineStage = useCallback(
     async (leadId: string, stage: PipelineStage, note?: string) => {
-      if (!session?.user) {
-        signIn("google");
+      if (!user) {
+        signIn();
         return;
       }
       try {
         const res = await fetch("/api/pipeline", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ leadId, stage, note }),
+          body: JSON.stringify({
+            leadId,
+            stage,
+            note,
+            user: { name: user.name, email: user.email },
+          }),
         });
         if (res.ok) {
           const entry = await res.json();
           setPipelineData((prev) => ({ ...prev, [leadId]: entry }));
         } else if (res.status === 401) {
-          signIn("google");
+          signIn();
         }
       } catch {
         // Silently handle network errors for pipeline updates
       }
     },
-    [session]
+    [user, signIn]
   );
 
   const handleOutreachRequest = useCallback((lead: Lead) => {
@@ -211,19 +216,19 @@ export function Dashboard({ initialData }: DashboardProps) {
             </div>
             <div className="flex items-center gap-3">
               {/* User Auth */}
-              {session?.user ? (
+              {user ? (
                 <div className="flex items-center gap-2">
-                  {session.user.image ? (
+                  {user.image ? (
                     <img
-                      src={session.user.image}
-                      alt={session.user.name || "User"}
+                      src={user.image}
+                      alt={user.name || "User"}
                       className="w-6 h-6 rounded-full"
                     />
                   ) : (
                     <User className="w-4 h-4 text-gray-500" />
                   )}
                   <span className="text-xs text-gray-600 font-medium">
-                    {session.user.name?.split(" ")[0]}
+                    {user.name?.split(" ")[0]}
                   </span>
                   <button
                     onClick={() => signOut()}
@@ -235,7 +240,7 @@ export function Dashboard({ initialData }: DashboardProps) {
                 </div>
               ) : (
                 <button
-                  onClick={() => signIn("google")}
+                  onClick={() => signIn()}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
                 >
                   <LogIn className="w-3.5 h-3.5" />

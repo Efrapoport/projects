@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { getAllPipelineEntries, updatePipelineStage } from "@/lib/pipeline-store";
 import type { PipelineStage } from "@/lib/pipeline-types";
 
@@ -25,21 +23,20 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-
-    if (!session?.user?.email || !session?.user?.name) {
-      return NextResponse.json(
-        { error: "Authentication required. Please sign in with Google." },
-        { status: 401 }
-      );
-    }
-
     const body = await req.json();
-    const { leadId, stage, note } = body as {
+    const { leadId, stage, note, user } = body as {
       leadId?: string;
       stage?: string;
       note?: string;
+      user?: { name?: string; email?: string };
     };
+
+    if (!user?.name || !user?.email) {
+      return NextResponse.json(
+        { error: "Authentication required. Please sign in." },
+        { status: 401 }
+      );
+    }
 
     if (!leadId || typeof leadId !== "string") {
       return NextResponse.json(
@@ -58,7 +55,7 @@ export async function POST(req: NextRequest) {
     const entry = updatePipelineStage(
       leadId,
       stage as PipelineStage,
-      { name: session.user.name, email: session.user.email },
+      { name: user.name, email: user.email },
       note
     );
 
