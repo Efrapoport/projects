@@ -17,6 +17,8 @@ interface InvestorContextValue {
   addInvestor: (id: string) => void;
   /** Remove an investor from the tracked list */
   removeInvestor: (id: string) => void;
+  /** Replace tracked list with a new set of IDs */
+  setTrackedIds: (ids: string[]) => void;
   /** Check if an investor is tracked */
   isTracked: (id: string) => boolean;
 }
@@ -68,6 +70,10 @@ export function InvestorProvider({ children }: { children: ReactNode }) {
     setTrackedIdList((prev) => prev.filter((x) => x !== id));
   }, []);
 
+  const setTrackedIds = useCallback((ids: string[]) => {
+    setTrackedIdList(ids);
+  }, []);
+
   const isTracked = useCallback(
     (id: string) => trackedIds.has(id),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -82,6 +88,7 @@ export function InvestorProvider({ children }: { children: ReactNode }) {
         trackedIds,
         addInvestor,
         removeInvestor,
+        setTrackedIds,
         isTracked,
       }}
     >

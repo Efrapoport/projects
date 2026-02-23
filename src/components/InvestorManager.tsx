@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { X, Check, Search, DollarSign, ExternalLink } from "lucide-react";
 import { useInvestors } from "@/lib/investor-context";
 import { countLeadsForInvestor } from "@/lib/investor-data";
@@ -11,14 +11,45 @@ interface InvestorManagerProps {
 }
 
 export function InvestorManager({ onClose, companyNames }: InvestorManagerProps) {
-  const { catalog, isTracked, addInvestor, removeInvestor } = useInvestors();
+  const { catalog, trackedIds, setTrackedIds } = useInvestors();
   const [search, setSearch] = useState("");
+
+  // Local draft — start from the current tracked set
+  const [draftIds, setDraftIds] = useState<Set<string>>(() => new Set(trackedIds));
 
   const filtered = search
     ? catalog.filter((inv) =>
         inv.name.toLowerCase().includes(search.toLowerCase()),
       )
     : catalog;
+
+  const isDraftTracked = (id: string) => draftIds.has(id);
+
+  const toggleInvestor = (id: string) => {
+    setDraftIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  // Detect whether the draft differs from the saved state
+  const hasChanges = useMemo(() => {
+    if (draftIds.size !== trackedIds.size) return true;
+    for (const id of draftIds) {
+      if (!trackedIds.has(id)) return true;
+    }
+    return false;
+  }, [draftIds, trackedIds]);
+
+  const handleUpdate = () => {
+    setTrackedIds(Array.from(draftIds));
+    onClose();
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -56,7 +87,7 @@ export function InvestorManager({ onClose, companyNames }: InvestorManagerProps)
         {/* Investor List */}
         <div className="px-5 py-2 max-h-[360px] overflow-y-auto space-y-1.5">
           {filtered.map((investor) => {
-            const tracked = isTracked(investor.id);
+            const tracked = isDraftTracked(investor.id);
             const leadCount = countLeadsForInvestor(investor.id, companyNames);
 
             return (
@@ -67,11 +98,7 @@ export function InvestorManager({ onClose, companyNames }: InvestorManagerProps)
                     ? "bg-blue-50 border-blue-200"
                     : "bg-white border-gray-200 hover:bg-gray-50"
                 }`}
-                onClick={() =>
-                  tracked
-                    ? removeInvestor(investor.id)
-                    : addInvestor(investor.id)
-                }
+                onClick={() => toggleInvestor(investor.id)}
               >
                 <div className="flex items-center gap-3">
                   <div
@@ -134,11 +161,21 @@ export function InvestorManager({ onClose, companyNames }: InvestorManagerProps)
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-3 border-t border-gray-100 bg-gray-50">
+        <div className="px-5 py-3 border-t border-gray-100 bg-gray-50 flex items-center justify-between">
           <p className="text-[10px] text-gray-400">
-            Funding data is sample/mock. Real enrichment via Crunchbase or
-            PitchBook can be plugged in later.
+            {draftIds.size} of {catalog.length} investors selected
           </p>
+          <button
+            onClick={handleUpdate}
+            disabled={!hasChanges}
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
+              hasChanges
+                ? "bg-blue-600 text-white hover:bg-blue-700"
+                : "bg-gray-200 text-gray-400 cursor-not-allowed"
+            }`}
+          >
+            Update
+          </button>
         </div>
       </div>
     </div>

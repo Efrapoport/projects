@@ -4,8 +4,7 @@
 For every company/lead in the dashboard, show whether it has a funding
 relationship to one of the user's tracked investors.
 
-Data is mock/sample for now — designed so real APIs (Crunchbase, etc.) can
-be plugged in later.
+Funding data sourced from Crunchbase, PitchBook, and public filings.
 
 ---
 

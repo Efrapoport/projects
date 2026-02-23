@@ -225,7 +225,7 @@ export const INVESTOR_CATALOG: Investor[] = [
   {
     id: "steve-klein",
     name: "Steve Klein",
-    website: "https://www.stevekle.in",
+    website: "https://www.applecoreholdings.com",
     linkedinUrl: "https://www.linkedin.com/in/stevehklein",
   },
   {
@@ -250,12 +250,8 @@ export const INVESTOR_CATALOG: Investor[] = [
   },
 ];
 
-// Default investors pre-selected for new users
-export const DEFAULT_TRACKED_IDS = [
-  "time-ventures",
-  "conviction",
-  "nfx",
-];
+// Default investors pre-selected for new users (all investors)
+export const DEFAULT_TRACKED_IDS = INVESTOR_CATALOG.map((inv) => inv.id);
 
 // ── Company → Investor Funding Map ──────────────────────────────────
 // Keys are lowercased company names.  Each entry lists the investor ID,
