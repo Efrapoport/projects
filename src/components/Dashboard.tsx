@@ -1,13 +1,16 @@
 "use client";
 
 import { useState, useMemo, useCallback } from "react";
+import { useSession, signIn, signOut } from "next-auth/react";
 import { Lead, Filters, DEFAULT_FILTERS } from "@/lib/types";
+import type { PipelineData, PipelineStage } from "@/lib/pipeline-types";
 import { applyFilters } from "@/lib/filters";
 import { FilterBar } from "./FilterBar";
 import { LeadTable } from "./LeadTable";
 import { SignalPanel } from "./SignalPanel";
 import { StatsBar } from "./StatsBar";
-import { RefreshCw, Cloud, Mail, AlertTriangle, Loader2, Handshake } from "lucide-react";
+import { OutreachModal } from "./OutreachModal";
+import { RefreshCw, Cloud, Mail, AlertTriangle, Loader2, Handshake, LogIn, LogOut, User } from "lucide-react";
 import { HealthCheckButton } from "./HealthCheck";
 import { InvestorManager } from "./InvestorManager";
 
@@ -24,6 +27,7 @@ interface DashboardProps {
 }
 
 export function Dashboard({ initialData }: DashboardProps) {
+  const { data: session } = useSession();
   const hasInitial = !!(initialData?.leads?.length);
 
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
@@ -37,6 +41,10 @@ export function Dashboard({ initialData }: DashboardProps) {
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>(initialData?.warnings || []);
   const [showInvestorManager, setShowInvestorManager] = useState(false);
+
+  // Pipeline state
+  const [pipelineData, setPipelineData] = useState<PipelineData>({});
+  const [outreachLead, setOutreachLead] = useState<Lead | null>(null);
 
   // Client-side filtering — instant response when user changes timeframe/filters
   const filteredLeads = useMemo(
@@ -75,12 +83,67 @@ export function Dashboard({ initialData }: DashboardProps) {
     }
   }, []);
 
+  const fetchPipelineData = useCallback(async () => {
+    try {
+      const res = await fetch("/api/pipeline");
+      if (res.ok) {
+        const data = await res.json();
+        setPipelineData(data);
+      }
+    } catch {
+      // Pipeline fetch is non-critical; silently ignore errors
+    }
+  }, []);
+
   // Fetch on mount only if no server-provided data
   useState(() => {
     if (!hasInitial) {
       fetchLeads();
     }
+    fetchPipelineData();
   });
+
+  const handleUpdatePipelineStage = useCallback(
+    async (leadId: string, stage: PipelineStage, note?: string) => {
+      if (!session?.user) {
+        signIn("google");
+        return;
+      }
+      try {
+        const res = await fetch("/api/pipeline", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ leadId, stage, note }),
+        });
+        if (res.ok) {
+          const entry = await res.json();
+          setPipelineData((prev) => ({ ...prev, [leadId]: entry }));
+        } else if (res.status === 401) {
+          signIn("google");
+        }
+      } catch {
+        // Silently handle network errors for pipeline updates
+      }
+    },
+    [session]
+  );
+
+  const handleOutreachRequest = useCallback((lead: Lead) => {
+    setOutreachLead(lead);
+  }, []);
+
+  const handleOutreachSend = useCallback(
+    async (message: string) => {
+      if (!outreachLead) return;
+      await handleUpdatePipelineStage(
+        outreachLead.id,
+        "outreach_sent",
+        `LinkedIn message: ${message.substring(0, 100)}...`
+      );
+      setOutreachLead(null);
+    },
+    [outreachLead, handleUpdatePipelineStage]
+  );
 
   const selectedLead = selectedLeadId
     ? filteredLeads.find((l) => l.id === selectedLeadId) || null
@@ -147,6 +210,38 @@ export function Dashboard({ initialData }: DashboardProps) {
               </div>
             </div>
             <div className="flex items-center gap-3">
+              {/* User Auth */}
+              {session?.user ? (
+                <div className="flex items-center gap-2">
+                  {session.user.image ? (
+                    <img
+                      src={session.user.image}
+                      alt={session.user.name || "User"}
+                      className="w-6 h-6 rounded-full"
+                    />
+                  ) : (
+                    <User className="w-4 h-4 text-gray-500" />
+                  )}
+                  <span className="text-xs text-gray-600 font-medium">
+                    {session.user.name?.split(" ")[0]}
+                  </span>
+                  <button
+                    onClick={() => signOut()}
+                    className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                    title="Sign out"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => signIn("google")}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  Sign In
+                </button>
+              )}
               <span
                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${sourceColor}`}
               >
@@ -311,6 +406,9 @@ export function Dashboard({ initialData }: DashboardProps) {
                 onSelectLead={(id) =>
                   setSelectedLeadId(id === selectedLeadId ? null : id)
                 }
+                pipelineData={pipelineData}
+                onUpdatePipelineStage={handleUpdatePipelineStage}
+                onOutreachRequest={handleOutreachRequest}
               />
             </div>
 
@@ -334,6 +432,15 @@ export function Dashboard({ initialData }: DashboardProps) {
         <InvestorManager
           onClose={() => setShowInvestorManager(false)}
           companyNames={allLeads.map((l) => l.company.name)}
+        />
+      )}
+
+      {/* Outreach Modal */}
+      {outreachLead && (
+        <OutreachModal
+          lead={outreachLead}
+          onClose={() => setOutreachLead(null)}
+          onSend={handleOutreachSend}
         />
       )}
     </div>

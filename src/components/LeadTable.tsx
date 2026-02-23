@@ -1,6 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import { Lead, SignalSource } from "@/lib/types";
+import type { PipelineData, PipelineStage } from "@/lib/pipeline-types";
 import {
   Linkedin,
   Search,
@@ -17,11 +19,15 @@ import {
 } from "lucide-react";
 import { useInvestors } from "@/lib/investor-context";
 import { getRelationshipsForCompany } from "@/lib/investor-data";
+import { PipelineBadge, PipelineDropdown } from "./PipelineDropdown";
 
 interface LeadTableProps {
   leads: Lead[];
   selectedLeadId: string | null;
   onSelectLead: (id: string) => void;
+  pipelineData: PipelineData;
+  onUpdatePipelineStage: (leadId: string, stage: PipelineStage, note?: string) => void;
+  onOutreachRequest: (lead: Lead) => void;
 }
 
 const sourceIcons: Record<SignalSource, React.ReactNode> = {
@@ -95,7 +101,12 @@ export function LeadTable({
   leads,
   selectedLeadId,
   onSelectLead,
+  pipelineData,
+  onUpdatePipelineStage,
+  onOutreachRequest,
 }: LeadTableProps) {
+  const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
+
   if (leads.length === 0) {
     return (
       <div className="bg-white border border-gray-200 rounded-xl p-12 text-center shadow-sm">
@@ -125,6 +136,9 @@ export function LeadTable({
               </th>
               <th className="px-4 py-2.5 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
                 Score
+              </th>
+              <th className="px-4 py-2.5 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                Stage
               </th>
               <th className="px-4 py-2.5 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
                 Trigger Event
@@ -205,6 +219,31 @@ export function LeadTable({
                 </td>
                 <td className="px-4 py-3">
                   <ScoreBadge score={lead.score} />
+                </td>
+                <td className="px-4 py-3 relative">
+                  <PipelineBadge
+                    entry={pipelineData[lead.id] ?? null}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setOpenDropdownId(
+                        openDropdownId === lead.id ? null : lead.id
+                      );
+                    }}
+                  />
+                  {openDropdownId === lead.id && (
+                    <PipelineDropdown
+                      leadId={lead.id}
+                      entry={pipelineData[lead.id] ?? null}
+                      onUpdateStage={(leadId, stage, note) => {
+                        onUpdatePipelineStage(leadId, stage, note);
+                        setOpenDropdownId(null);
+                      }}
+                      onOutreachRequest={() => {
+                        setOpenDropdownId(null);
+                        onOutreachRequest(lead);
+                      }}
+                    />
+                  )}
                 </td>
                 <td className="px-4 py-3">
                   <p className="text-xs text-gray-600 max-w-xs truncate">
