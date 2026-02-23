@@ -84,8 +84,6 @@ export function PipelineDropdown({
   onOutreachRequest,
 }: PipelineDropdownProps) {
   const currentStage = entry?.currentStage ?? "new";
-  const [selectedStage, setSelectedStage] = useState<PipelineStage>(currentStage);
-  const [note, setNote] = useState("");
   const [isOpen, setIsOpen] = useState(true);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -104,13 +102,14 @@ export function PipelineDropdown({
 
   if (!isOpen) return null;
 
-  function handleUpdate() {
-    if (selectedStage === "outreach_sent" && currentStage !== "outreach_sent") {
+  function handleStageClick(stage: PipelineStage) {
+    if (stage === currentStage) return;
+    if (stage === "outreach_sent" && currentStage !== "outreach_sent") {
       onOutreachRequest();
       setIsOpen(false);
       return;
     }
-    onUpdateStage(leadId, selectedStage, note || undefined);
+    onUpdateStage(leadId, stage);
     setIsOpen(false);
   }
 
@@ -130,27 +129,26 @@ export function PipelineDropdown({
         <div className="space-y-1">
           {STAGE_ORDER.map((stage) => {
             const config = STAGE_CONFIG[stage];
-            const isSelected = selectedStage === stage;
             const isCurrent = currentStage === stage;
 
             return (
               <button
                 key={stage}
-                onClick={() => setSelectedStage(stage)}
+                onClick={() => handleStageClick(stage)}
                 className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left text-sm transition-colors ${
-                  isSelected
+                  isCurrent
                     ? `${config.bgColor} ${config.color} font-medium`
                     : "text-gray-600 hover:bg-gray-50"
                 }`}
               >
                 <span
                   className={`w-3 h-3 rounded-full border-2 flex items-center justify-center ${
-                    isSelected
+                    isCurrent
                       ? "border-current"
                       : "border-gray-300"
                   }`}
                 >
-                  {isSelected && (
+                  {isCurrent && (
                     <span className="w-1.5 h-1.5 rounded-full bg-current" />
                   )}
                 </span>
@@ -189,29 +187,6 @@ export function PipelineDropdown({
             </div>
           </div>
         )}
-
-        {/* Note */}
-        <div className="mt-3 pt-3 border-t border-gray-100">
-          <input
-            type="text"
-            placeholder="Add a note (optional)"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            className="w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-400 focus:border-blue-400"
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleUpdate();
-            }}
-          />
-          <button
-            onClick={handleUpdate}
-            disabled={selectedStage === currentStage && !note}
-            className="mt-2 w-full px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed rounded-md transition-colors"
-          >
-            {selectedStage === "outreach_sent" && currentStage !== "outreach_sent"
-              ? "Compose Outreach Message..."
-              : "Update"}
-          </button>
-        </div>
       </div>
     </div>
   );
