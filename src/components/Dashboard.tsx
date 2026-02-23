@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { Lead, Filters, DEFAULT_FILTERS } from "@/lib/types";
 import type { PipelineData, PipelineStage } from "@/lib/pipeline-types";
@@ -10,7 +10,7 @@ import { LeadTable } from "./LeadTable";
 import { SignalPanel } from "./SignalPanel";
 import { StatsBar } from "./StatsBar";
 import { OutreachModal } from "./OutreachModal";
-import { RefreshCw, Cloud, Mail, AlertTriangle, Loader2, Handshake, LogIn, LogOut, User } from "lucide-react";
+import { RefreshCw, Cloud, Mail, AlertTriangle, Loader2, Handshake, LogIn, LogOut, User, Sparkles } from "lucide-react";
 import { HealthCheckButton } from "./HealthCheck";
 import { InvestorManager } from "./InvestorManager";
 
@@ -45,6 +45,43 @@ export function Dashboard({ initialData }: DashboardProps) {
   // Pipeline state
   const [pipelineData, setPipelineData] = useState<PipelineData>({});
   const [outreachLead, setOutreachLead] = useState<Lead | null>(null);
+
+  // ── "New since last visit" tracking ──────────────────────────────────
+  const LAST_VISIT_KEY = "dashboard-last-visit";
+  const lastVisitRef = useRef<string | null>(null);
+  const [newLeadCount, setNewLeadCount] = useState(0);
+  const [showNewBanner, setShowNewBanner] = useState(false);
+
+  // Read last-visit timestamp once on mount
+  useEffect(() => {
+    try {
+      lastVisitRef.current = localStorage.getItem(LAST_VISIT_KEY);
+    } catch {
+      // storage unavailable
+    }
+  }, []);
+
+  // When leads load/change, compute how many are new since last visit
+  useEffect(() => {
+    if (allLeads.length === 0) return;
+    const lastVisit = lastVisitRef.current;
+    if (lastVisit) {
+      const cutoff = new Date(lastVisit).getTime();
+      const count = allLeads.filter(
+        (l) => new Date(l.firstDetected).getTime() > cutoff,
+      ).length;
+      if (count > 0) {
+        setNewLeadCount(count);
+        setShowNewBanner(true);
+      }
+    }
+    // Update the stored timestamp to "now" for the next visit
+    try {
+      localStorage.setItem(LAST_VISIT_KEY, new Date().toISOString());
+    } catch {
+      // storage unavailable
+    }
+  }, [allLeads]);
 
   // Client-side filtering — instant response when user changes timeframe/filters
   const filteredLeads = useMemo(
@@ -411,6 +448,24 @@ export function Dashboard({ initialData }: DashboardProps) {
 
           {/* Stats */}
           <StatsBar leads={filteredLeads} />
+
+          {/* New leads since last visit */}
+          {showNewBanner && newLeadCount > 0 && (
+            <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-indigo-500" />
+                <span className="text-sm text-indigo-800">
+                  <strong>{newLeadCount}</strong> new lead{newLeadCount !== 1 ? "s" : ""} since your last visit
+                </span>
+              </div>
+              <button
+                onClick={() => setShowNewBanner(false)}
+                className="text-xs font-medium text-indigo-600 hover:text-indigo-800 transition-colors"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
 
           {/* Filters */}
           <FilterBar
