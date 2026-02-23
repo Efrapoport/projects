@@ -416,7 +416,6 @@ export function Dashboard({ initialData }: DashboardProps) {
           <FilterBar
             filters={filters}
             onChange={setFilters}
-            industries={industries}
             totalLeads={allLeads.length}
             filteredLeads={filteredLeads.length}
           />

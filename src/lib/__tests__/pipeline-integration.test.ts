@@ -121,15 +121,12 @@ for (const lead of leads) {
 const industries = getIndustriesFromLeads(leads);
 console.log(`Step 2 — Industries detected: ${industries.join(", ")}\n`);
 
-// Step 4: Filter test
-const filtered = applyFilters(leads, { ...DEFAULT_FILTERS, minScore: 20 });
-console.log(`Step 3 — applyFilters(minScore=20): ${filtered.length}/${leads.length} leads pass\n`);
+// Step 4: Filter test (timeframe only)
+const filtered = applyFilters(leads, { timeframe: "30d" });
+console.log(`Step 3 — applyFilters(timeframe=30d): ${filtered.length}/${leads.length} leads pass\n`);
 
-const healthcareOnly = applyFilters(leads, { ...DEFAULT_FILTERS, industries: ["Healthcare"] });
-console.log(`Step 4 — applyFilters(industry=Healthcare): ${healthcareOnly.length}/${leads.length} leads pass`);
-if (healthcareOnly.length > 0) {
-  console.log(`         → ${healthcareOnly.map(l => l.company.name).join(", ")}`);
-}
+const recent = applyFilters(leads, { timeframe: "7d" });
+console.log(`Step 4 — applyFilters(timeframe=7d): ${recent.length}/${leads.length} leads pass`);
 
 console.log("\n╔══════════════════════════════════════════════════════════╗");
 console.log("║   ✓ Pipeline works end-to-end with scraped data        ║");

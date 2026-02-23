@@ -97,20 +97,10 @@ export type Timeframe = "24h" | "7d" | "30d";
 
 export interface Filters {
   timeframe: Timeframe;
-  companySizeMin: number;
-  companySizeMax: number;
-  industries: string[];
-  minScore: number;
-  sources: SignalSource[];
 }
 
 export const DEFAULT_FILTERS: Filters = {
   timeframe: "30d",
-  companySizeMin: 0,
-  companySizeMax: 100000,
-  industries: [],
-  minScore: 0,
-  sources: [],
 };
 
 // ── Investor Relationship Types ──────────────────────────────────────

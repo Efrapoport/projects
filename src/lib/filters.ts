@@ -20,34 +20,6 @@ export function applyFilters(leads: Lead[], filters: Filters): Lead[] {
     );
     if (!hasRecentSignal) return false;
 
-    // Company size filter (skip for companies with unknown size)
-    const size = lead.company.employeeCount;
-    if (size > 0 && (size < filters.companySizeMin || size > filters.companySizeMax)) {
-      return false;
-    }
-
-    // Industry filter
-    if (
-      filters.industries.length > 0 &&
-      !filters.industries.includes(lead.company.industry)
-    ) {
-      return false;
-    }
-
-    // Minimum score filter
-    if (lead.score < filters.minScore) {
-      return false;
-    }
-
-    // Source filter
-    if (filters.sources.length > 0) {
-      const leadSources = new Set(lead.signals.map((s) => s.source));
-      const hasMatchingSource = filters.sources.some((src) =>
-        leadSources.has(src)
-      );
-      if (!hasMatchingSource) return false;
-    }
-
     return true;
   });
 }
