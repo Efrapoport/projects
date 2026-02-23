@@ -103,12 +103,16 @@ export function Dashboard({ initialData }: DashboardProps) {
     fetchPipelineData();
   });
 
+  // Pipeline error toast
+  const [pipelineError, setPipelineError] = useState<string | null>(null);
+
   const handleUpdatePipelineStage = useCallback(
     async (leadId: string, stage: PipelineStage, note?: string) => {
       if (!user) {
         signIn();
         return;
       }
+      setPipelineError(null);
       try {
         const res = await fetch("/api/pipeline", {
           method: "POST",
@@ -125,9 +129,12 @@ export function Dashboard({ initialData }: DashboardProps) {
           setPipelineData((prev) => ({ ...prev, [leadId]: entry }));
         } else if (res.status === 401) {
           signIn();
+        } else {
+          const body = await res.json().catch(() => ({}));
+          setPipelineError(body.error || `Pipeline update failed (${res.status})`);
         }
-      } catch {
-        // Silently handle network errors for pipeline updates
+      } catch (err) {
+        setPipelineError(`Network error: ${err instanceof Error ? err.message : "unknown"}`);
       }
     },
     [user, signIn]
@@ -297,6 +304,19 @@ export function Dashboard({ initialData }: DashboardProps) {
       {/* Main Content */}
       <main className="max-w-[1600px] mx-auto px-4 py-4">
         <div className="space-y-4">
+          {/* Pipeline error banner */}
+          {pipelineError && (
+            <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2 flex items-center justify-between">
+              <span className="text-sm text-red-700">{pipelineError}</span>
+              <button
+                onClick={() => setPipelineError(null)}
+                className="text-xs font-medium text-red-700 hover:text-red-900 underline"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
           {/* Error Banner (non-fatal — we still have leads showing) */}
           {error && allLeads.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 flex items-center justify-between">
