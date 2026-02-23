@@ -1,5 +1,4 @@
-import fs from "fs";
-import path from "path";
+import { Redis } from "@upstash/redis";
 import type {
   PipelineData,
   PipelineEntry,
@@ -7,45 +6,32 @@ import type {
   PipelineUser,
 } from "./pipeline-types";
 
-const DATA_DIR = path.join(process.cwd(), "data");
-const DATA_FILE = path.join(DATA_DIR, "pipeline.json");
+const redis = new Redis({
+  url: process.env.KV_REST_API_URL!,
+  token: process.env.KV_REST_API_TOKEN!,
+});
 
-function ensureDataDir(): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
+const PIPELINE_KEY = "pipeline-data";
+
+export async function getAllPipelineEntries(): Promise<PipelineData> {
+  const data = await redis.get<PipelineData>(PIPELINE_KEY);
+  return data ?? {};
 }
 
-function readData(): PipelineData {
-  ensureDataDir();
-  if (!fs.existsSync(DATA_FILE)) {
-    return {};
-  }
-  const raw = fs.readFileSync(DATA_FILE, "utf-8");
-  return JSON.parse(raw) as PipelineData;
-}
-
-function writeData(data: PipelineData): void {
-  ensureDataDir();
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), "utf-8");
-}
-
-export function getAllPipelineEntries(): PipelineData {
-  return readData();
-}
-
-export function getPipelineEntry(leadId: string): PipelineEntry | null {
-  const data = readData();
+export async function getPipelineEntry(
+  leadId: string
+): Promise<PipelineEntry | null> {
+  const data = await getAllPipelineEntries();
   return data[leadId] ?? null;
 }
 
-export function updatePipelineStage(
+export async function updatePipelineStage(
   leadId: string,
   stage: PipelineStage,
   user: PipelineUser,
   note?: string
-): PipelineEntry {
-  const data = readData();
+): Promise<PipelineEntry> {
+  const data = await getAllPipelineEntries();
 
   const existing = data[leadId];
   const entry: PipelineEntry = existing ?? {
@@ -63,7 +49,7 @@ export function updatePipelineStage(
   });
 
   data[leadId] = entry;
-  writeData(data);
+  await redis.set(PIPELINE_KEY, data);
 
   return entry;
 }

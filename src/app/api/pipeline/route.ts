@@ -13,7 +13,7 @@ const VALID_STAGES: PipelineStage[] = [
 
 export async function GET() {
   try {
-    const data = getAllPipelineEntries();
+    const data = await getAllPipelineEntries();
     return NextResponse.json(data);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const entry = updatePipelineStage(
+    const entry = await updatePipelineStage(
       leadId,
       stage as PipelineStage,
       { name: user.name, email: user.email },
