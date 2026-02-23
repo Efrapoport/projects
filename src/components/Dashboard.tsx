@@ -5,6 +5,9 @@ import { useAuth } from "@/lib/auth-context";
 import { Lead, Filters, DEFAULT_FILTERS } from "@/lib/types";
 import type { PipelineData, PipelineStage } from "@/lib/pipeline-types";
 import { applyFilters } from "@/lib/filters";
+import { scoreInvestorConnections } from "@/lib/scoring";
+import { getRelationshipsForCompany } from "@/lib/investor-data";
+import { useInvestors } from "@/lib/investor-context";
 import { FilterBar } from "./FilterBar";
 import { LeadTable } from "./LeadTable";
 import { SignalPanel } from "./SignalPanel";
@@ -28,6 +31,7 @@ interface DashboardProps {
 
 export function Dashboard({ initialData }: DashboardProps) {
   const { user, signIn, signOut } = useAuth();
+  const { trackedIds } = useInvestors();
   const hasInitial = !!(initialData?.leads?.length);
 
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
@@ -85,10 +89,27 @@ export function Dashboard({ initialData }: DashboardProps) {
     }
   }, [allLeads, lastVisitKey]);
 
+  // Enrich lead scores with investor relationship bonuses (user-specific)
+  const enrichedLeads = useMemo(() => {
+    if (trackedIds.size === 0) return allLeads;
+    return allLeads
+      .map((lead) => {
+        const relationships = getRelationshipsForCompany(lead.company.name, trackedIds);
+        if (relationships.length === 0) return lead;
+        const investorBonus = scoreInvestorConnections(relationships);
+        return {
+          ...lead,
+          score: Math.min(100, lead.score + investorBonus),
+          investorRelationships: relationships,
+        };
+      })
+      .sort((a, b) => b.score - a.score);
+  }, [allLeads, trackedIds]);
+
   // Client-side filtering — instant response when user changes timeframe/filters
   const filteredLeads = useMemo(
-    () => applyFilters(allLeads, filters),
-    [allLeads, filters]
+    () => applyFilters(enrichedLeads, filters),
+    [enrichedLeads, filters]
   );
 
   const fetchLeads = useCallback(async (refresh = false) => {

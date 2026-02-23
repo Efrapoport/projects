@@ -670,7 +670,7 @@ const contactSets: Record<string, Contact[]> = {
 function buildLead(company: Company): Lead {
   const signals = signalSets[company.id] || [];
   const contacts = contactSets[company.id] || [];
-  const score = computeLeadScore(signals);
+  const score = computeLeadScore(signals, { contacts });
   const triggerEvent = generateTriggerEvent(signals);
 
   const dates = signals.map((s) => new Date(s.detectedAt).getTime());

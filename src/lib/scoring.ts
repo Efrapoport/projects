@@ -1,10 +1,19 @@
-import { Signal, Lead } from "./types";
+import { Signal, Contact, HiringManager, InvestorRelationship } from "./types";
 
 // ── Scoring Constants ────────────────────────────────────────────────
 
 const HIGH_WEIGHT = 20;
 const MEDIUM_WEIGHT = 10;
 const LOW_WEIGHT = 5;
+
+// LinkedIn contact quality bonuses
+const LINKEDIN_HIGH_CONFIDENCE_BONUS = 15;
+const LINKEDIN_MEDIUM_CONFIDENCE_BONUS = 10;
+
+// Investor relationship bonuses
+const INVESTOR_FIRST_BONUS = 15;
+const INVESTOR_ADDITIONAL_BONUS = 5;
+const INVESTOR_MAX_BONUS = 25;
 
 // High-weight keywords in job descriptions
 const HIGH_WEIGHT_JD_KEYWORDS = [
@@ -102,13 +111,82 @@ export function scoreSignal(signal: Signal): number {
 }
 
 /**
- * Compute the total lead score from all signals.
+ * Score the quality of LinkedIn contacts / hiring manager.
+ * A strong LinkedIn-found decision-maker means we can reach out
+ * directly, which makes the lead significantly more actionable.
+ */
+export function scoreContactQuality(
+  contacts: Contact[],
+  hiringManager?: HiringManager,
+): number {
+  // Best: high-confidence LinkedIn contact with a profile URL
+  const hasHighConfidenceLinkedIn = contacts.some(
+    (c) => c.confidence === "high" && c.linkedinUrl,
+  );
+  if (hasHighConfidenceLinkedIn) return LINKEDIN_HIGH_CONFIDENCE_BONUS;
+
+  // High-confidence hiring manager found via LinkedIn
+  if (
+    hiringManager &&
+    hiringManager.source === "linkedin" &&
+    hiringManager.confidence === "high"
+  ) {
+    return LINKEDIN_HIGH_CONFIDENCE_BONUS;
+  }
+
+  // Medium-confidence LinkedIn contact
+  const hasMediumConfidenceLinkedIn = contacts.some(
+    (c) => c.confidence === "medium" && c.linkedinUrl,
+  );
+  if (hasMediumConfidenceLinkedIn) return LINKEDIN_MEDIUM_CONFIDENCE_BONUS;
+
+  if (
+    hiringManager &&
+    hiringManager.source === "linkedin" &&
+    hiringManager.confidence === "medium"
+  ) {
+    return LINKEDIN_MEDIUM_CONFIDENCE_BONUS;
+  }
+
+  return 0;
+}
+
+/**
+ * Score investor connections. A lead backed by a tracked investor
+ * is a warm intro opportunity — significantly higher conversion.
+ */
+export function scoreInvestorConnections(
+  relationships: InvestorRelationship[],
+): number {
+  if (relationships.length === 0) return 0;
+  const bonus =
+    INVESTOR_FIRST_BONUS +
+    (relationships.length - 1) * INVESTOR_ADDITIONAL_BONUS;
+  return Math.min(bonus, INVESTOR_MAX_BONUS);
+}
+
+/**
+ * Compute the total lead score from all signals plus optional
+ * enrichment data (LinkedIn contacts, investor relationships).
  * Normalised to 0–100.
  */
-export function computeLeadScore(signals: Signal[]): number {
-  const rawTotal = signals.reduce((sum, s) => sum + scoreSignal(s), 0);
-  // Cap at 100, with a theoretical max around ~100 for 3-4 strong signals
-  return Math.min(100, rawTotal);
+export function computeLeadScore(
+  signals: Signal[],
+  options?: {
+    contacts?: Contact[];
+    hiringManager?: HiringManager;
+    investorRelationships?: InvestorRelationship[];
+  },
+): number {
+  const signalTotal = signals.reduce((sum, s) => sum + scoreSignal(s), 0);
+  const contactBonus = options?.contacts
+    ? scoreContactQuality(options.contacts, options.hiringManager)
+    : 0;
+  const investorBonus = options?.investorRelationships
+    ? scoreInvestorConnections(options.investorRelationships)
+    : 0;
+  // Cap at 100
+  return Math.min(100, signalTotal + contactBonus + investorBonus);
 }
 
 /**

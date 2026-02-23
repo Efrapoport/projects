@@ -162,8 +162,6 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
 
     const signals = [signal];
 
-    // Score and build Lead
-    const score = computeLeadScore(signals);
     const triggerEvent = generateTriggerEvent(signals);
 
     const detectedTime = new Date(job.detectedAt).getTime();
@@ -178,10 +176,16 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
       reportingManagers.get(companyKey),
     );
 
+    // Re-compute score with contact/hiring manager quality factored in
+    const enrichedScore = computeLeadScore(signals, {
+      contacts: builtContacts,
+      hiringManager,
+    });
+
     leads.push({
       id: `lead-${companyId}`,
       company,
-      score,
+      score: enrichedScore,
       signals,
       triggerEvent,
       contacts: builtContacts,
