@@ -3,6 +3,7 @@ import { scrapeJobs, loadBundledJobs } from "@/lib/scraper";
 import { buildLeadsFromJobs, getIndustriesFromLeads } from "@/lib/lead-builder";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 30; // Allow up to 30s for live scraping on Vercel
 
 export default async function Home() {
   // Try to get real scraped data for the initial server render

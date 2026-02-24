@@ -6,6 +6,8 @@ import { createLogger } from "@/lib/logger";
 
 const log = createLogger("api/leads");
 
+export const maxDuration = 30; // Allow up to 30s for live scraping on Vercel
+
 export async function GET(request: NextRequest) {
   const requestTimer = log.time("request");
 

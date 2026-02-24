@@ -1697,6 +1697,19 @@ export function isSalesforcePrimaryRole(job: ScrapedJob): boolean {
 
 // ── Public API ──────────────────────────────────────────────────────
 
+/** Race a promise against a timeout.  On timeout, resolves with the
+ *  fallback value instead of rejecting — this way `Promise.allSettled`
+ *  collects partial results from fast sources without waiting for slow
+ *  ones that may take 60-140 s (Google Jobs, Indeed, EarnBetter each
+ *  run multiple sequential queries with long per-request timeouts). */
+function withSourceTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => { timer = setTimeout(() => resolve(fallback), ms); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 export async function scrapeJobs(
   forceRefresh = false
 ): Promise<ScrapedJob[]> {
@@ -1713,15 +1726,20 @@ export async function scrapeJobs(
   const timer = log.time("scrape-all");
   log.info("Starting multi-source job scrape");
 
-  // Phase 1: Run non-Greenhouse live sources in parallel
+  // Phase 1: Run non-Greenhouse live sources in parallel.
+  // Each source gets its own timeout so fast sources (RemoteOK ~2s,
+  // Arbeitnow ~2s) aren't blocked by slow ones (Google Jobs can run
+  // 7 sequential queries × 20s = 140s).  This ensures Phase 1
+  // completes in ~10s, fitting within Vercel function limits.
+  const SOURCE_TIMEOUT = 10_000;  // 10s per source
   const phase1Results = await Promise.allSettled([
-    fetchRemoteOK(),
-    fetchArbeitnow(),
-    fetchJobicy(),
-    fetchHimalayas(),
-    fetchGoogleJobs(),
-    fetchEarnBetter(),
-    fetchIndeed(),
+    withSourceTimeout(fetchRemoteOK(), SOURCE_TIMEOUT, []),
+    withSourceTimeout(fetchArbeitnow(), SOURCE_TIMEOUT, []),
+    withSourceTimeout(fetchJobicy(), SOURCE_TIMEOUT, []),
+    withSourceTimeout(fetchHimalayas(), SOURCE_TIMEOUT, []),
+    withSourceTimeout(fetchGoogleJobs(), SOURCE_TIMEOUT, []),
+    withSourceTimeout(fetchEarnBetter(), SOURCE_TIMEOUT, []),
+    withSourceTimeout(fetchIndeed(), SOURCE_TIMEOUT, []),
   ]);
 
   const phase1Names = ["RemoteOK", "Arbeitnow", "Jobicy", "Himalayas", "Google Jobs", "EarnBetter", "Indeed"];
@@ -1744,11 +1762,19 @@ export async function scrapeJobs(
 
   // Phase 2: Auto-discover Greenhouse boards from companies found above,
   // then fetch Salesforce jobs from all known boards (seeds + discovered).
+  // Wrapped with a timeout so slow Greenhouse probing doesn't block results.
+  const GREENHOUSE_TIMEOUT = 8_000;
   const companyNames = [...new Set(allJobs.map((j) => j.company))];
-  const boardTokens = await discoverGreenhouseBoards(companyNames);
   let greenhouseJobs: ScrapedJob[] = [];
   try {
-    greenhouseJobs = await fetchGreenhouseBoards(boardTokens);
+    greenhouseJobs = await withSourceTimeout(
+      (async () => {
+        const boardTokens = await discoverGreenhouseBoards(companyNames);
+        return fetchGreenhouseBoards(boardTokens);
+      })(),
+      GREENHOUSE_TIMEOUT,
+      [],
+    );
   } catch (err) {
     recordSourceFailure("Greenhouse", String(err));
   }
