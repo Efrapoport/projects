@@ -100,34 +100,36 @@ console.log("╚═════════════════════�
 
 console.log(`Input: ${realisticJobs.length} scraped jobs from ${new Set(realisticJobs.map(j => j.source)).size} sources\n`);
 
-// Step 1: Build leads
-const leads = await buildLeadsFromJobs(realisticJobs);
-console.log(`Step 1 — buildLeadsFromJobs: ${leads.length} leads (one per job posting)\n`);
+(async () => {
+  // Step 1: Build leads
+  const leads = await buildLeadsFromJobs(realisticJobs);
+  console.log(`Step 1 — buildLeadsFromJobs: ${leads.length} leads (one per job posting)\n`);
 
-// Step 2: Show each lead
-for (const lead of leads) {
-  console.log(`  ┌─ ${lead.company.name}`);
-  console.log(`  │  Score: ${lead.score} | Industry: ${lead.company.industry}`);
-  console.log(`  │  Location: ${lead.company.city || "Remote"}${lead.company.state ? `, ${lead.company.state}` : ""}`);
-  console.log(`  │  Signals: ${lead.signals.length}`);
-  for (const sig of lead.signals) {
-    console.log(`  │    • [${sig.source}] ${sig.title}`);
+  // Step 2: Show each lead
+  for (const lead of leads) {
+    console.log(`  ┌─ ${lead.company.name}`);
+    console.log(`  │  Score: ${lead.score} | Industry: ${lead.company.industry}`);
+    console.log(`  │  Location: ${lead.company.city || "Remote"}${lead.company.state ? `, ${lead.company.state}` : ""}`);
+    console.log(`  │  Signals: ${lead.signals.length}`);
+    for (const sig of lead.signals) {
+      console.log(`  │    • [${sig.source}] ${sig.title}`);
+    }
+    console.log(`  │  Trigger: ${lead.triggerEvent}`);
+    console.log(`  └─ Status: ${lead.status}\n`);
   }
-  console.log(`  │  Trigger: ${lead.triggerEvent}`);
-  console.log(`  └─ Status: ${lead.status}\n`);
-}
 
-// Step 3: Show industries
-const industries = getIndustriesFromLeads(leads);
-console.log(`Step 2 — Industries detected: ${industries.join(", ")}\n`);
+  // Step 3: Show industries
+  const industries = getIndustriesFromLeads(leads);
+  console.log(`Step 2 — Industries detected: ${industries.join(", ")}\n`);
 
-// Step 4: Filter test (timeframe only)
-const filtered = applyFilters(leads, { timeframe: "30d" });
-console.log(`Step 3 — applyFilters(timeframe=30d): ${filtered.length}/${leads.length} leads pass\n`);
+  // Step 4: Filter test (timeframe only)
+  const filtered = applyFilters(leads, { timeframe: "30d" });
+  console.log(`Step 3 — applyFilters(timeframe=30d): ${filtered.length}/${leads.length} leads pass\n`);
 
-const recent = applyFilters(leads, { timeframe: "7d" });
-console.log(`Step 4 — applyFilters(timeframe=7d): ${recent.length}/${leads.length} leads pass`);
+  const recent = applyFilters(leads, { timeframe: "7d" });
+  console.log(`Step 4 — applyFilters(timeframe=7d): ${recent.length}/${leads.length} leads pass`);
 
-console.log("\n╔══════════════════════════════════════════════════════════╗");
-console.log("║   ✓ Pipeline works end-to-end with scraped data        ║");
-console.log("╚══════════════════════════════════════════════════════════╝");
+  console.log("\n╔══════════════════════════════════════════════════════════╗");
+  console.log("║   ✓ Pipeline works end-to-end with scraped data        ║");
+  console.log("╚══════════════════════════════════════════════════════════╝");
+})();
