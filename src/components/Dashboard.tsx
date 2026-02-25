@@ -51,43 +51,66 @@ export function Dashboard({ initialData }: DashboardProps) {
   const [outreachLead, setOutreachLead] = useState<Lead | null>(null);
 
   // ── "New since last visit" tracking (per-user) ───────────────────────
-  const lastVisitKey = user?.email
-    ? `dashboard-last-visit:${user.email}`
-    : "dashboard-last-visit";
-  const lastVisitRef = useRef<string | null>(null);
+  // Tracks which leads the user has already seen by a stable fingerprint
+  // (company+URL or company+title).  On each visit we compare the current
+  // set of leads against the stored set — leads not previously seen are
+  // counted as "new since your last visit".
+  const seenLeadsKey = user?.email
+    ? `dashboard-seen-leads:${user.email}`
+    : "dashboard-seen-leads";
+  const seenLeadsRef = useRef<Set<string> | null>(null);
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [showNewBanner, setShowNewBanner] = useState(false);
 
-  // Read last-visit timestamp once on mount (or when user changes)
+  // Build a stable fingerprint for a lead (survives ID changes across scrapes)
+  const leadFingerprint = useCallback((l: Lead) => {
+    const url = l.signals[0]?.url;
+    const company = l.company.name.toLowerCase().trim();
+    return url ? `${company}|${url}` : `${company}|${(l.signals[0]?.title || "").toLowerCase().trim()}`;
+  }, []);
+
+  // Read previously-seen leads once on mount (or when user changes)
   useEffect(() => {
     try {
-      lastVisitRef.current = localStorage.getItem(lastVisitKey);
+      const stored = localStorage.getItem(seenLeadsKey);
+      seenLeadsRef.current = stored ? new Set<string>(JSON.parse(stored)) : null;
     } catch {
-      // storage unavailable
+      seenLeadsRef.current = null;
     }
-  }, [lastVisitKey]);
+  }, [seenLeadsKey]);
 
   // When leads load/change, compute how many are new since last visit
   useEffect(() => {
     if (allLeads.length === 0) return;
-    const lastVisit = lastVisitRef.current;
-    if (lastVisit) {
-      const cutoff = new Date(lastVisit).getTime();
-      const count = allLeads.filter(
-        (l) => new Date(l.firstDetected).getTime() > cutoff,
-      ).length;
+    const previouslySeen = seenLeadsRef.current;
+
+    if (previouslySeen) {
+      // Count leads the user hasn't seen before
+      const count = allLeads.filter((l) => !previouslySeen.has(leadFingerprint(l))).length;
       if (count > 0) {
         setNewLeadCount(count);
         setShowNewBanner(true);
       }
+    } else {
+      // First visit ever — show all leads as new
+      setNewLeadCount(allLeads.length);
+      setShowNewBanner(true);
     }
-    // Update the stored timestamp to "now" for the next visit
+
+    // Store the full set of seen leads (merge with previous to remember old ones)
     try {
-      localStorage.setItem(lastVisitKey, new Date().toISOString());
+      const currentFps = allLeads.map(leadFingerprint);
+      const merged = previouslySeen
+        ? new Set([...previouslySeen, ...currentFps])
+        : new Set(currentFps);
+      // Cap at 500 entries to avoid unbounded growth
+      const entries = Array.from(merged);
+      const capped = entries.length > 500 ? entries.slice(entries.length - 500) : entries;
+      localStorage.setItem(seenLeadsKey, JSON.stringify(capped));
     } catch {
       // storage unavailable
     }
-  }, [allLeads, lastVisitKey]);
+  }, [allLeads, seenLeadsKey, leadFingerprint]);
 
   // Enrich lead scores with investor relationship bonuses (user-specific)
   const enrichedLeads = useMemo(() => {
