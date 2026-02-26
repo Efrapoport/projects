@@ -3,6 +3,7 @@ import { computeLeadScore, generateTriggerEvent } from "./scoring";
 import { ScrapedJob } from "./scraper";
 import { batchValidateCompanyUrls, batchEnrichEmployeeCounts, batchLookupContacts, safeLinkedInUrl, safeCompanySearchUrl, extractEmployeeCountFromText, extractReportingManager, getLastEnrichmentStats } from "./data-integrity";
 import type { LookedUpContact } from "./data-integrity";
+import { getBlockedCompanyNames } from "./feedback-store";
 import { createLogger } from "./logger";
 
 const log = createLogger("lead-builder");
@@ -12,9 +13,29 @@ const log = createLogger("lead-builder");
 export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
   const timer = log.time("build-leads");
 
+  // Filter out jobs from blocklisted companies (e.g. job boards marked "irrelevant")
+  let blockedNames: Set<string>;
+  try {
+    blockedNames = await getBlockedCompanyNames();
+  } catch {
+    blockedNames = new Set();
+  }
+
+  const filteredJobs = blockedNames.size > 0
+    ? jobs.filter((job) => {
+        const blocked = blockedNames.has(job.company.toLowerCase().trim());
+        if (blocked) log.debug(`Skipping blocked company: ${job.company}`);
+        return !blocked;
+      })
+    : jobs;
+
+  if (filteredJobs.length < jobs.length) {
+    log.info(`Blocklist filtered out ${jobs.length - filteredJobs.length} jobs from ${blockedNames.size} blocked companies`);
+  }
+
   // Collect unique company names for batch URL validation
   const uniqueCompanies = new Map<string, string>(); // normalized key → original name
-  for (const job of jobs) {
+  for (const job of filteredJobs) {
     const key = job.company.toLowerCase().trim();
     if (!uniqueCompanies.has(key)) {
       uniqueCompanies.set(key, job.company);
@@ -31,54 +52,57 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
   let employeeCounts: Map<string, number>;
   let contactResults: Map<string, LookedUpContact[]>;
 
-  try {
-    const [urlResults, empResults, contactRes] = await Promise.all([
-      batchValidateCompanyUrls(companyEntries),
-      batchEnrichEmployeeCounts(companyEntries),
-      batchLookupContacts(companyEntries),
-    ]);
-    validationResults = urlResults;
-    employeeCounts = empResults;
-    contactResults = contactRes.contacts;
+  // Use Promise.allSettled so one enrichment failure doesn't wipe out the others.
+  // Previously used Promise.all, which meant a single URL-validation failure
+  // would discard successfully-fetched employee counts and contacts.
+  const [urlSettled, empSettled, contactSettled] = await Promise.allSettled([
+    batchValidateCompanyUrls(companyEntries),
+    batchEnrichEmployeeCounts(companyEntries),
+    batchLookupContacts(companyEntries),
+  ]);
 
-    // Merge LinkedIn company page employee counts (side-channel from
-    // contact lookup — zero extra API calls) into the primary map.
-    let linkedInSideChannelFills = 0;
-    for (const [key, count] of contactRes.employeeCounts) {
-      if (count > 0 && !employeeCounts.get(key)) {
-        employeeCounts.set(key, count);
-        linkedInSideChannelFills++;
-      }
+  validationResults = urlSettled.status === "fulfilled" ? urlSettled.value : new Map();
+  employeeCounts = empSettled.status === "fulfilled" ? empSettled.value : new Map();
+  const contactRes = contactSettled.status === "fulfilled" ? contactSettled.value : { contacts: new Map<string, LookedUpContact[]>(), employeeCounts: new Map<string, number>() };
+  contactResults = contactRes.contacts;
+
+  // Log any enrichment failures individually (not as a blanket wipe)
+  if (urlSettled.status === "rejected") log.warn("URL validation failed", { error: String(urlSettled.reason) });
+  if (empSettled.status === "rejected") log.warn("Employee enrichment failed", { error: String(empSettled.reason) });
+  if (contactSettled.status === "rejected") log.warn("Contact lookup failed", { error: String(contactSettled.reason) });
+
+  // Merge LinkedIn company page employee counts (side-channel from
+  // contact lookup — zero extra API calls) into the primary map.
+  let linkedInSideChannelFills = 0;
+  for (const [key, count] of contactRes.employeeCounts) {
+    if (count > 0 && !employeeCounts.get(key)) {
+      employeeCounts.set(key, count);
+      linkedInSideChannelFills++;
     }
-
-    // Get detailed enrichment stats for side-by-side comparison
-    const enrichStats = getLastEnrichmentStats();
-    log.info("Company enrichment complete", {
-      urlValidated: validationResults.size,
-      employeeEnriched: Array.from(empResults.values()).filter((v) => v > 0).length,
-      employeeFromLinkedIn: linkedInSideChannelFills,
-      companiesWithContacts: Array.from(contactRes.contacts.values()).filter((v) => v.length > 0).length,
-      ...(enrichStats && {
-        employeeSources: {
-          googleKG: enrichStats.fromGoogleKG,
-          serpApi: enrichStats.fromSerpApi,
-          cached: enrichStats.fromCache,
-          notFound: enrichStats.notFound,
-        },
-      }),
-    });
-  } catch (error) {
-    log.warn("Company enrichment failed — using safe fallbacks", { error: String(error) });
-    validationResults = new Map();
-    employeeCounts = new Map();
-    contactResults = new Map();
   }
+
+  // Get detailed enrichment stats for side-by-side comparison
+  const enrichStats = getLastEnrichmentStats();
+  log.info("Company enrichment complete", {
+    urlValidated: validationResults.size,
+    employeeEnriched: Array.from(employeeCounts.values()).filter((v) => v > 0).length,
+    employeeFromLinkedIn: linkedInSideChannelFills,
+    companiesWithContacts: Array.from(contactRes.contacts.values()).filter((v) => v.length > 0).length,
+    ...(enrichStats && {
+      employeeSources: {
+        googleKG: enrichStats.fromGoogleKG,
+        serpApi: enrichStats.fromSerpApi,
+        cached: enrichStats.fromCache,
+        notFound: enrichStats.notFound,
+      },
+    }),
+  });
 
   // ── Fallback: extract employee count from job descriptions ────────
   // For companies where SerpAPI returned 0, try parsing the JD text itself.
   // Catches phrases like "50-person startup", "team of 200", etc.
   let jdEmployeeFills = 0;
-  for (const job of jobs) {
+  for (const job of filteredJobs) {
     const key = job.company.toLowerCase().trim();
     if (!employeeCounts.get(key)) {
       const fromJd = extractEmployeeCountFromText(job.description);
@@ -96,7 +120,7 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
   // For companies with no LinkedIn contacts, parse reporting hierarchy
   // from the JD to create a synthetic contact (title only, no URL).
   const reportingManagers = new Map<string, { title: string; confidence: "high" | "medium" | "low" }>();
-  for (const job of jobs) {
+  for (const job of filteredJobs) {
     const key = job.company.toLowerCase().trim();
     const existingContacts = contactResults.get(key);
     if (existingContacts && existingContacts.length > 0) continue;
@@ -114,8 +138,8 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
   // Build one Lead per job posting (each job = its own row)
   const leads: Lead[] = [];
 
-  for (let i = 0; i < jobs.length; i++) {
-    const job = jobs[i];
+  for (let i = 0; i < filteredJobs.length; i++) {
+    const job = filteredJobs[i];
 
     // Parse location
     const { city, state } = parseLocation(job.location);
@@ -197,7 +221,7 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
   }
 
   const sorted = leads.sort((a, b) => b.score - a.score);
-  timer.end(`Built ${sorted.length} leads from ${jobs.length} jobs`);
+  timer.end(`Built ${sorted.length} leads from ${filteredJobs.length} jobs`);
   return sorted;
 }
 

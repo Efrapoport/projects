@@ -12,7 +12,7 @@ export default async function Home() {
     let jobs = await Promise.race([
       scrapeJobs(),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("timeout")), 15000)
+        setTimeout(() => reject(new Error("timeout")), 10000)
       ),
     ]);
 

@@ -4,7 +4,8 @@ export type PipelineStage =
   | "outreach_sent"
   | "meeting_scheduled"
   | "closed_won"
-  | "closed_lost";
+  | "closed_lost"
+  | "irrelevant";
 
 export interface PipelineUser {
   name: string;
@@ -74,6 +75,13 @@ export const STAGE_CONFIG: Record<
     borderColor: "border-red-200",
     icon: "x",
   },
+  irrelevant: {
+    label: "Irrelevant",
+    color: "text-slate-700",
+    bgColor: "bg-slate-100",
+    borderColor: "border-slate-300",
+    icon: "ban",
+  },
 };
 
 export const STAGE_ORDER: PipelineStage[] = [
@@ -83,4 +91,24 @@ export const STAGE_ORDER: PipelineStage[] = [
   "meeting_scheduled",
   "closed_won",
   "closed_lost",
+  "irrelevant",
+];
+
+// Predefined reasons for marking a lead as irrelevant.
+// Reasons that indicate "not a real lead" trigger auto-blocking.
+export const IRRELEVANT_REASONS = [
+  "Not a real company (job board/agency)",
+  "Too mature",
+  "Too complex",
+  "Not hiring a Salesforce admin",
+  "Duplicate",
+  "Other",
+] as const;
+
+export type IrrelevantReason = (typeof IRRELEVANT_REASONS)[number];
+
+// Reasons that should auto-block the company from future scrapes
+export const AUTO_BLOCK_REASONS: IrrelevantReason[] = [
+  "Not a real company (job board/agency)",
+  "Duplicate",
 ];

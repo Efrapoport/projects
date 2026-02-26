@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
       scrapedJobs = await Promise.race([
         scrapeJobs(forceRefresh),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Scraper timeout after 20s")), 20000)
+          setTimeout(() => reject(new Error("Scraper timeout after 12s")), 12000)
         ),
       ]);
       scrapeTimer.end("Scraping complete", { jobs: scrapedJobs.length });

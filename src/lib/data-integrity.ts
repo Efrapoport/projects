@@ -120,7 +120,7 @@ export async function validateCompanyUrls(
  */
 export async function batchValidateCompanyUrls(
   companies: Array<{ name: string; slug: string }>,
-  timeoutMs = 8000
+  timeoutMs = 6000
 ): Promise<Map<string, CompanyUrlValidation>> {
   const timer = log.time("batch-url-validation");
   const results = new Map<string, CompanyUrlValidation>();
@@ -479,7 +479,7 @@ export function getLastEnrichmentStats(): EmployeeEnrichmentStats | null {
  */
 export async function batchEnrichEmployeeCounts(
   companies: Array<{ name: string }>,
-  timeoutMs = 25000
+  timeoutMs = 15000
 ): Promise<Map<string, number>> {
   const serpApiKey = process.env.SERPAPI_KEY;
   const googleKgKey = process.env.GOOGLE_KG_API_KEY;
@@ -491,7 +491,7 @@ export async function batchEnrichEmployeeCounts(
 
   const timer = log.time("employee-enrichment");
   const results = new Map<string, number>();
-  const MAX_LOOKUPS = 15; // User has paid SerpAPI — can enrich more companies
+  const MAX_LOOKUPS = 25; // Enrich more companies for better coverage
   const CONCURRENCY = 3;
 
   // Track source attribution for side-by-side comparison
@@ -983,7 +983,7 @@ export interface BatchContactResult {
 
 export async function batchLookupContacts(
   companies: Array<{ name: string }>,
-  timeoutMs = 20000
+  timeoutMs = 15000
 ): Promise<BatchContactResult> {
   const apiKey = process.env.SERPAPI_KEY;
   if (!apiKey) {
@@ -994,7 +994,7 @@ export async function batchLookupContacts(
   const timer = log.time("contact-lookup");
   const contacts = new Map<string, LookedUpContact[]>();
   const employeeCounts = new Map<string, number>();
-  const MAX_LOOKUPS = 10; // User has paid SerpAPI — can look up more contacts
+  const MAX_LOOKUPS = 20; // Look up more contacts for better coverage
   const CONCURRENCY = 3;
 
   // Deduplicate

@@ -196,6 +196,11 @@ export function Dashboard({ initialData }: DashboardProps) {
         return;
       }
       setPipelineError(null);
+
+      // Look up company name so the API can blocklist if needed
+      const lead = enrichedLeads.find((l) => l.id === leadId);
+      const companyName = lead?.company.name;
+
       try {
         const res = await fetch("/api/pipeline", {
           method: "POST",
@@ -205,6 +210,7 @@ export function Dashboard({ initialData }: DashboardProps) {
             stage,
             note,
             user: { name: user.name, email: user.email },
+            ...(stage === "irrelevant" && companyName ? { companyName } : {}),
           }),
         });
         if (res.ok) {
@@ -220,7 +226,7 @@ export function Dashboard({ initialData }: DashboardProps) {
         setPipelineError(`Network error: ${err instanceof Error ? err.message : "unknown"}`);
       }
     },
-    [user, signIn]
+    [user, signIn, enrichedLeads]
   );
 
   const handleOutreachRequest = useCallback((lead: Lead) => {
