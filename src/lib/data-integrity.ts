@@ -479,7 +479,7 @@ export function getLastEnrichmentStats(): EmployeeEnrichmentStats | null {
  */
 export async function batchEnrichEmployeeCounts(
   companies: Array<{ name: string }>,
-  timeoutMs = 25000
+  timeoutMs = 6000
 ): Promise<Map<string, number>> {
   const serpApiKey = process.env.SERPAPI_KEY;
   const googleKgKey = process.env.GOOGLE_KG_API_KEY;
@@ -983,7 +983,7 @@ export interface BatchContactResult {
 
 export async function batchLookupContacts(
   companies: Array<{ name: string }>,
-  timeoutMs = 20000
+  timeoutMs = 6000
 ): Promise<BatchContactResult> {
   const apiKey = process.env.SERPAPI_KEY;
   if (!apiKey) {

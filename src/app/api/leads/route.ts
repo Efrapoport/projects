@@ -42,9 +42,26 @@ export async function GET(request: NextRequest) {
       log.info("Using bundled fallback in API route", { count: scrapedJobs.length });
     }
 
-    // Build leads from whatever we got (now async — includes URL validation)
+    // Build leads from whatever we got (now async — includes URL validation).
+    // Enrichment (URL validation, employee counts, contact lookup) can be
+    // slow, so cap it at 8s.  If it times out, rebuild without enrichment
+    // so we never exceed maxDuration and trigger a 504.
+    const BUILD_TIMEOUT = 8000;
     const buildTimer = log.time("build-leads");
-    const allLeads = scrapedJobs.length > 0 ? await buildLeadsFromJobs(scrapedJobs) : [];
+    let allLeads: Awaited<ReturnType<typeof buildLeadsFromJobs>> = [];
+    if (scrapedJobs.length > 0) {
+      try {
+        allLeads = await Promise.race([
+          buildLeadsFromJobs(scrapedJobs),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Lead build timeout after 8s")), BUILD_TIMEOUT)
+          ),
+        ]);
+      } catch (err) {
+        log.warn("Lead build timed out — rebuilding without enrichment", { error: String(err) });
+        allLeads = await buildLeadsFromJobs(scrapedJobs, { skipEnrichment: true });
+      }
+    }
     buildTimer.end("Leads built", { count: allLeads.length });
 
     const availableIndustries = getIndustriesFromLeads(allLeads);
