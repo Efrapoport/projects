@@ -9,10 +9,11 @@ export default async function Home() {
   // Try to get real scraped data for the initial server render
   let initialData;
   try {
+    const pageStart = Date.now();
     let jobs = await Promise.race([
       scrapeJobs(),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("timeout")), 15000)
+        setTimeout(() => reject(new Error("timeout")), 20000)
       ),
     ]);
 
@@ -24,7 +25,19 @@ export default async function Home() {
     }
 
     if (jobs.length > 0) {
-      const allLeads = await buildLeadsFromJobs(jobs);
+      // Dynamic build timeout: whatever remains of 30s budget minus 2s safety margin
+      const buildTimeout = Math.max(5000, 28000 - (Date.now() - pageStart));
+      let allLeads;
+      try {
+        allLeads = await Promise.race([
+          buildLeadsFromJobs(jobs),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("build timeout")), buildTimeout)
+          ),
+        ]);
+      } catch {
+        allLeads = await buildLeadsFromJobs(jobs, { skipEnrichment: true });
+      }
       const industries = getIndustriesFromLeads(allLeads);
 
       // Strip signal.raw (full JD) — client only needs the extracted snippets
@@ -47,7 +60,8 @@ export default async function Home() {
     try {
       const bundledJobs = loadBundledJobs();
       if (bundledJobs.length > 0) {
-        const allLeads = await buildLeadsFromJobs(bundledJobs);
+        // Bundled fallback — skip enrichment to stay within time budget
+        const allLeads = await buildLeadsFromJobs(bundledJobs, { skipEnrichment: true });
         const industries = getIndustriesFromLeads(allLeads);
         const leadsForClient = allLeads.map((lead) => ({
           ...lead,

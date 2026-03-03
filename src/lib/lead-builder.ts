@@ -9,7 +9,10 @@ const log = createLogger("lead-builder");
 
 // ── Transform Scraped Jobs → Leads ──────────────────────────────────
 
-export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
+export async function buildLeadsFromJobs(
+  jobs: ScrapedJob[],
+  options?: { skipEnrichment?: boolean },
+): Promise<Lead[]> {
   const timer = log.time("build-leads");
 
   // Collect unique company names for batch URL validation
@@ -31,47 +34,54 @@ export async function buildLeadsFromJobs(jobs: ScrapedJob[]): Promise<Lead[]> {
   let employeeCounts: Map<string, number>;
   let contactResults: Map<string, LookedUpContact[]>;
 
-  try {
-    const [urlResults, empResults, contactRes] = await Promise.all([
-      batchValidateCompanyUrls(companyEntries),
-      batchEnrichEmployeeCounts(companyEntries),
-      batchLookupContacts(companyEntries),
-    ]);
-    validationResults = urlResults;
-    employeeCounts = empResults;
-    contactResults = contactRes.contacts;
-
-    // Merge LinkedIn company page employee counts (side-channel from
-    // contact lookup — zero extra API calls) into the primary map.
-    let linkedInSideChannelFills = 0;
-    for (const [key, count] of contactRes.employeeCounts) {
-      if (count > 0 && !employeeCounts.get(key)) {
-        employeeCounts.set(key, count);
-        linkedInSideChannelFills++;
-      }
-    }
-
-    // Get detailed enrichment stats for side-by-side comparison
-    const enrichStats = getLastEnrichmentStats();
-    log.info("Company enrichment complete", {
-      urlValidated: validationResults.size,
-      employeeEnriched: Array.from(empResults.values()).filter((v) => v > 0).length,
-      employeeFromLinkedIn: linkedInSideChannelFills,
-      companiesWithContacts: Array.from(contactRes.contacts.values()).filter((v) => v.length > 0).length,
-      ...(enrichStats && {
-        employeeSources: {
-          googleKG: enrichStats.fromGoogleKG,
-          serpApi: enrichStats.fromSerpApi,
-          cached: enrichStats.fromCache,
-          notFound: enrichStats.notFound,
-        },
-      }),
-    });
-  } catch (error) {
-    log.warn("Company enrichment failed — using safe fallbacks", { error: String(error) });
+  if (options?.skipEnrichment) {
+    log.info("Skipping enrichment (fast-path fallback)");
     validationResults = new Map();
     employeeCounts = new Map();
     contactResults = new Map();
+  } else {
+    try {
+      const [urlResults, empResults, contactRes] = await Promise.all([
+        batchValidateCompanyUrls(companyEntries),
+        batchEnrichEmployeeCounts(companyEntries),
+        batchLookupContacts(companyEntries),
+      ]);
+      validationResults = urlResults;
+      employeeCounts = empResults;
+      contactResults = contactRes.contacts;
+
+      // Merge LinkedIn company page employee counts (side-channel from
+      // contact lookup — zero extra API calls) into the primary map.
+      let linkedInSideChannelFills = 0;
+      for (const [key, count] of contactRes.employeeCounts) {
+        if (count > 0 && !employeeCounts.get(key)) {
+          employeeCounts.set(key, count);
+          linkedInSideChannelFills++;
+        }
+      }
+
+      // Get detailed enrichment stats for side-by-side comparison
+      const enrichStats = getLastEnrichmentStats();
+      log.info("Company enrichment complete", {
+        urlValidated: validationResults.size,
+        employeeEnriched: Array.from(empResults.values()).filter((v) => v > 0).length,
+        employeeFromLinkedIn: linkedInSideChannelFills,
+        companiesWithContacts: Array.from(contactRes.contacts.values()).filter((v) => v.length > 0).length,
+        ...(enrichStats && {
+          employeeSources: {
+            googleKG: enrichStats.fromGoogleKG,
+            serpApi: enrichStats.fromSerpApi,
+            cached: enrichStats.fromCache,
+            notFound: enrichStats.notFound,
+          },
+        }),
+      });
+    } catch (error) {
+      log.warn("Company enrichment failed — using safe fallbacks", { error: String(error) });
+      validationResults = new Map();
+      employeeCounts = new Map();
+      contactResults = new Map();
+    }
   }
 
   // ── Fallback: extract employee count from job descriptions ────────

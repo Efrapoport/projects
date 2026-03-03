@@ -21,6 +21,7 @@ export async function GET(request: NextRequest) {
     let scrapedJobs: Awaited<ReturnType<typeof scrapeJobs>> = [];
     let dataSource: "live" | "bundled" = "live";
 
+    const requestStart = Date.now();
     try {
       const scrapeTimer = log.time("scrape");
       scrapedJobs = await Promise.race([
@@ -42,9 +43,30 @@ export async function GET(request: NextRequest) {
       log.info("Using bundled fallback in API route", { count: scrapedJobs.length });
     }
 
-    // Build leads from whatever we got (now async — includes URL validation)
+    // Build leads from whatever we got (now async — includes URL validation).
+    // Enrichment (URL validation, employee counts, contact lookup) can be
+    // slow, so cap it with a dynamic budget: whatever remains of the 30s
+    // maxDuration after the scraper finishes, minus a 2s safety margin.
+    // If the scraper was fast (10s), enrichment gets ~18s — plenty.
+    // If the scraper was slow (20s), enrichment gets ~8s — still workable.
+    const elapsed = Date.now() - requestStart;
+    const BUILD_TIMEOUT = Math.max(5000, 28000 - elapsed); // at least 5s, up to ~18s
+    log.info("Build timeout budget", { elapsedMs: elapsed, buildTimeoutMs: BUILD_TIMEOUT });
     const buildTimer = log.time("build-leads");
-    const allLeads = scrapedJobs.length > 0 ? await buildLeadsFromJobs(scrapedJobs) : [];
+    let allLeads: Awaited<ReturnType<typeof buildLeadsFromJobs>> = [];
+    if (scrapedJobs.length > 0) {
+      try {
+        allLeads = await Promise.race([
+          buildLeadsFromJobs(scrapedJobs),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Lead build timeout after ${BUILD_TIMEOUT}ms`)), BUILD_TIMEOUT)
+          ),
+        ]);
+      } catch (err) {
+        log.warn("Lead build timed out — rebuilding without enrichment", { error: String(err) });
+        allLeads = await buildLeadsFromJobs(scrapedJobs, { skipEnrichment: true });
+      }
+    }
     buildTimer.end("Leads built", { count: allLeads.length });
 
     const availableIndustries = getIndustriesFromLeads(allLeads);
