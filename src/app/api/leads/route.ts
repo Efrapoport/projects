@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
       scrapedJobs = await Promise.race([
         scrapeJobs(forceRefresh),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Scraper timeout after 20s")), 20000)
+          setTimeout(() => reject(new Error("Scraper timeout after 15s")), 15000)
         ),
       ]);
       scrapeTimer.end("Scraping complete", { jobs: scrapedJobs.length });
@@ -44,9 +44,10 @@ export async function GET(request: NextRequest) {
 
     // Build leads from whatever we got (now async — includes URL validation).
     // Enrichment (URL validation, employee counts, contact lookup) can be
-    // slow, so cap it at 8s.  If it times out, rebuild without enrichment
+    // slow, so cap it at 12s.  If it times out, rebuild without enrichment
     // so we never exceed maxDuration and trigger a 504.
-    const BUILD_TIMEOUT = 8000;
+    // Budget: scraper (≤15s) + build (≤12s) = 27s, safely under 30s.
+    const BUILD_TIMEOUT = 12000;
     const buildTimer = log.time("build-leads");
     let allLeads: Awaited<ReturnType<typeof buildLeadsFromJobs>> = [];
     if (scrapedJobs.length > 0) {
@@ -54,7 +55,7 @@ export async function GET(request: NextRequest) {
         allLeads = await Promise.race([
           buildLeadsFromJobs(scrapedJobs),
           new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("Lead build timeout after 8s")), BUILD_TIMEOUT)
+            setTimeout(() => reject(new Error("Lead build timeout after 12s")), BUILD_TIMEOUT)
           ),
         ]);
       } catch (err) {
