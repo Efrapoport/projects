@@ -21,12 +21,13 @@ export async function GET(request: NextRequest) {
     let scrapedJobs: Awaited<ReturnType<typeof scrapeJobs>> = [];
     let dataSource: "live" | "bundled" = "live";
 
+    const requestStart = Date.now();
     try {
       const scrapeTimer = log.time("scrape");
       scrapedJobs = await Promise.race([
         scrapeJobs(forceRefresh),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Scraper timeout after 15s")), 15000)
+          setTimeout(() => reject(new Error("Scraper timeout after 20s")), 20000)
         ),
       ]);
       scrapeTimer.end("Scraping complete", { jobs: scrapedJobs.length });
@@ -44,10 +45,13 @@ export async function GET(request: NextRequest) {
 
     // Build leads from whatever we got (now async — includes URL validation).
     // Enrichment (URL validation, employee counts, contact lookup) can be
-    // slow, so cap it at 12s.  If it times out, rebuild without enrichment
-    // so we never exceed maxDuration and trigger a 504.
-    // Budget: scraper (≤15s) + build (≤12s) = 27s, safely under 30s.
-    const BUILD_TIMEOUT = 12000;
+    // slow, so cap it with a dynamic budget: whatever remains of the 30s
+    // maxDuration after the scraper finishes, minus a 2s safety margin.
+    // If the scraper was fast (10s), enrichment gets ~18s — plenty.
+    // If the scraper was slow (20s), enrichment gets ~8s — still workable.
+    const elapsed = Date.now() - requestStart;
+    const BUILD_TIMEOUT = Math.max(5000, 28000 - elapsed); // at least 5s, up to ~18s
+    log.info("Build timeout budget", { elapsedMs: elapsed, buildTimeoutMs: BUILD_TIMEOUT });
     const buildTimer = log.time("build-leads");
     let allLeads: Awaited<ReturnType<typeof buildLeadsFromJobs>> = [];
     if (scrapedJobs.length > 0) {
@@ -55,7 +59,7 @@ export async function GET(request: NextRequest) {
         allLeads = await Promise.race([
           buildLeadsFromJobs(scrapedJobs),
           new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("Lead build timeout after 12s")), BUILD_TIMEOUT)
+            setTimeout(() => reject(new Error(`Lead build timeout after ${BUILD_TIMEOUT}ms`)), BUILD_TIMEOUT)
           ),
         ]);
       } catch (err) {
