@@ -120,7 +120,7 @@ export async function validateCompanyUrls(
  */
 export async function batchValidateCompanyUrls(
   companies: Array<{ name: string; slug: string }>,
-  timeoutMs = 8000
+  timeoutMs = 7000
 ): Promise<Map<string, CompanyUrlValidation>> {
   const timer = log.time("batch-url-validation");
   const results = new Map<string, CompanyUrlValidation>();
@@ -262,7 +262,7 @@ async function lookupEmployeeCountViaGoogleKG(
     });
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const timeout = setTimeout(() => controller.abort(), 3000);
 
     const response = await fetch(
       `https://kgsearch.googleapis.com/v1/entities:search?${params.toString()}`,
@@ -340,7 +340,7 @@ async function lookupEmployeeCountViaSerpApi(companyName: string, apiKey: string
     });
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    const timeout = setTimeout(() => controller.abort(), 4000);
 
     const response = await fetch(`https://serpapi.com/search.json?${params.toString()}`, {
       signal: controller.signal,
@@ -479,7 +479,7 @@ export function getLastEnrichmentStats(): EmployeeEnrichmentStats | null {
  */
 export async function batchEnrichEmployeeCounts(
   companies: Array<{ name: string }>,
-  timeoutMs = 6000
+  timeoutMs = 7000
 ): Promise<Map<string, number>> {
   const serpApiKey = process.env.SERPAPI_KEY;
   const googleKgKey = process.env.GOOGLE_KG_API_KEY;
@@ -786,7 +786,7 @@ async function lookupContacts(companyName: string, apiKey: string): Promise<Cont
     });
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    const timeout = setTimeout(() => controller.abort(), 4000);
 
     const response = await fetch(`https://serpapi.com/search.json?${params.toString()}`, {
       signal: controller.signal,
@@ -846,7 +846,7 @@ async function lookupContacts(companyName: string, apiKey: string): Promise<Cont
       });
 
       const controller2 = new AbortController();
-      const timeout2 = setTimeout(() => controller2.abort(), 10000);
+      const timeout2 = setTimeout(() => controller2.abort(), 4000);
 
       try {
         const resp2 = await fetch(`https://serpapi.com/search.json?${broaderParams.toString()}`, {
@@ -983,7 +983,7 @@ export interface BatchContactResult {
 
 export async function batchLookupContacts(
   companies: Array<{ name: string }>,
-  timeoutMs = 6000
+  timeoutMs = 7000
 ): Promise<BatchContactResult> {
   const apiKey = process.env.SERPAPI_KEY;
   if (!apiKey) {
