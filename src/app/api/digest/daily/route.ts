@@ -53,12 +53,14 @@ export async function GET(request: NextRequest) {
       return buildLeadsFromJobs(jobs, { skipEnrichment: true });
     });
 
-    // 3. Generate the email HTML (filters to last 24h internally)
-    const html = generateDailyLeadsEmail(leads, new Date());
-    const newLeads = filterLast24Hours(leads);
-
     const { searchParams } = request.nextUrl;
     const shouldSend = searchParams.get("send") === "true";
+    // preview_all=true skips the 24h filter so you can QA the full email layout
+    const previewAll = searchParams.get("preview_all") === "true";
+
+    // 3. Generate the email HTML (filters to last 24h unless preview_all)
+    const html = generateDailyLeadsEmail(leads, new Date(), { skipTimeFilter: previewAll });
+    const newLeads = previewAll ? leads : filterLast24Hours(leads);
 
     if (shouldSend) {
       const apiKey = process.env.RESEND_API_KEY;

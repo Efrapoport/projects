@@ -201,8 +201,8 @@ function buildLeadCard(lead: Lead): string {
  * Generate a comprehensive daily leads digest email for all leads
  * detected in the past 24 hours, including full detail cards for every lead.
  */
-export function generateDailyLeadsEmail(allLeads: Lead[], date: Date): string {
-  const newLeads = filterLast24Hours(allLeads).sort((a, b) => b.score - a.score);
+export function generateDailyLeadsEmail(allLeads: Lead[], date: Date, options?: { skipTimeFilter?: boolean }): string {
+  const newLeads = (options?.skipTimeFilter ? allLeads : filterLast24Hours(allLeads)).sort((a, b) => b.score - a.score);
 
   const formattedDate = date.toLocaleDateString("en-US", {
     weekday: "long",
