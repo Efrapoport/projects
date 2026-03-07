@@ -1,7 +1,7 @@
 {
   "crons": [
     {
-      "path": "/api/digest/daily?send=true",
+      "path": "/api/digest/daily",
       "schedule": "0 8 * * *"
     }
   ]

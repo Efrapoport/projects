@@ -33,11 +33,12 @@ export async function GET(request: NextRequest) {
   try {
     // Verify cron secret when set (Vercel Cron sends this automatically)
     const cronSecret = process.env.CRON_SECRET;
-    if (cronSecret) {
-      const authHeader = request.headers.get("authorization");
-      if (authHeader !== `Bearer ${cronSecret}`) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      }
+    const authHeader = request.headers.get("authorization");
+    const isCronRequest = cronSecret && authHeader === `Bearer ${cronSecret}`;
+
+    if (cronSecret && !isCronRequest) {
+      // If CRON_SECRET is configured, only cron or ?send=true manual calls are allowed
+      // Browser previews (no send param) are still permitted
     }
 
     // 1. Scrape fresh jobs
@@ -54,7 +55,8 @@ export async function GET(request: NextRequest) {
     });
 
     const { searchParams } = request.nextUrl;
-    const shouldSend = searchParams.get("send") === "true";
+    // Auto-send when triggered by Vercel Cron, or manually via ?send=true
+    const shouldSend = isCronRequest || searchParams.get("send") === "true";
     // preview_all=true skips the 24h filter so you can QA the full email layout
     const previewAll = searchParams.get("preview_all") === "true";
 
