@@ -5,7 +5,11 @@ import { Lead } from "./types";
  */
 export function filterLast24Hours(leads: Lead[]): Lead[] {
   const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  return leads.filter((l) => l.firstDetected >= cutoff);
+  return leads.filter((l) => {
+    // Include leads with missing dates (they were just built, so treat as "now")
+    if (!l.firstDetected) return true;
+    return l.firstDetected >= cutoff;
+  });
 }
 
 function escapeHtml(text: string): string {

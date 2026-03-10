@@ -37,8 +37,10 @@ export async function GET(request: NextRequest) {
     const isCronRequest = cronSecret && authHeader === `Bearer ${cronSecret}`;
 
     if (cronSecret && !isCronRequest) {
-      // If CRON_SECRET is configured, only cron or ?send=true manual calls are allowed
-      // Browser previews (no send param) are still permitted
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 }
+      );
     }
 
     // 1. Scrape fresh jobs

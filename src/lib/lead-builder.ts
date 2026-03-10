@@ -175,9 +175,9 @@ export async function buildLeadsFromJobs(
     const triggerEvent = generateTriggerEvent(signals);
 
     const detectedTime = new Date(job.detectedAt).getTime();
-    // If the source didn't provide a valid date, leave it empty rather
-    // than faking "just now".  The UI will show "unknown" instead.
-    const detectedAt = (Number.isFinite(detectedTime) && job.detectedAt) ? job.detectedAt : "";
+    // If the source didn't provide a valid date, fall back to "now" so
+    // the lead isn't silently dropped by time-based filters (e.g. daily digest).
+    const detectedAt = (Number.isFinite(detectedTime) && job.detectedAt) ? job.detectedAt : new Date().toISOString();
 
     const builtContacts = buildContacts(companyId, companyKey, contactResults, reportingManagers);
     const hiringManager = inferHiringManager(
