@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback, useEffect } from "react";
 import type { SIDependentLead } from "@/lib/types";
-import { RefreshCw, Loader2, AlertTriangle, Search, Users, Building2, TrendingUp, Briefcase, X, ExternalLink, Linkedin, Clock, CheckCircle2, UserCheck, Send, Copy, Check } from "lucide-react";
+import { RefreshCw, Loader2, AlertTriangle, Search, Users, Building2, TrendingUp, Briefcase, X, ExternalLink, Linkedin, Clock, Send, Copy, Check } from "lucide-react";
 import {
   SI_OUTREACH_TEMPLATES,
   selectBestSITemplate,

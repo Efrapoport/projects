@@ -198,7 +198,7 @@ async function fetchJSON(url: string, timeoutMs = 15000): Promise<unknown> {
 async function fetchRemoteOK(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
   const timer = log.time("remoteok");
-  const tags = ["salesforce", "crm", "salesforce-admin", "sfdc", "salesforce-developer"];
+  const tags = ["salesforce", "crm", "salesforce-admin", "sfdc", "salesforce-developer", "salesforce-consultant", "salesforce-contractor"];
   const seenUrls = new Set<string>();
 
   for (const tag of tags) {
@@ -247,7 +247,7 @@ async function fetchRemoteOK(): Promise<ScrapedJob[]> {
 async function fetchArbeitnow(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
   const timer = log.time("arbeitnow");
-  const queries = ["salesforce", "salesforce admin", "CRM administrator", "salesforce developer", "SFDC"];
+  const queries = ["salesforce", "salesforce admin", "CRM administrator", "salesforce developer", "SFDC", "salesforce consultant", "salesforce contractor"];
   const seenUrls = new Set<string>();
 
   for (const query of queries) {
@@ -293,7 +293,7 @@ async function fetchArbeitnow(): Promise<ScrapedJob[]> {
 async function fetchJobicy(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
   const timer = log.time("jobicy");
-  const queries = ["salesforce", "salesforce admin", "CRM", "salesforce developer", "SFDC"];
+  const queries = ["salesforce", "salesforce admin", "CRM", "salesforce developer", "SFDC", "salesforce consultant", "salesforce contractor"];
   const seenUrls = new Set<string>();
 
   for (const query of queries) {
@@ -337,7 +337,7 @@ async function fetchJobicy(): Promise<ScrapedJob[]> {
 async function fetchHimalayas(): Promise<ScrapedJob[]> {
   const jobs: ScrapedJob[] = [];
   const timer = log.time("himalayas");
-  const queries = ["salesforce", "salesforce admin", "CRM administrator", "salesforce developer", "SFDC"];
+  const queries = ["salesforce", "salesforce admin", "CRM administrator", "salesforce developer", "SFDC", "salesforce consultant", "salesforce contractor"];
   const seenUrls = new Set<string>();
 
   for (const query of queries) {
@@ -398,6 +398,10 @@ async function fetchGoogleJobs(): Promise<ScrapedJob[]> {
     "CRM administrator salesforce",
     "salesforce engineer",
     "business systems administrator salesforce",
+    // SI-dependency signals: consultant/contractor roles
+    "salesforce consultant",
+    "salesforce contractor",
+    "contract salesforce administrator",
   ];
 
   for (const query of queries) {
@@ -1629,7 +1633,7 @@ const DISQUALIFYING_PATTERNS = [
 
 const QUALIFYING_PATTERNS = [
   // Role-specific: "Salesforce admin/developer/engineer"
-  /salesforce\s+(?:admin|administrator|developer|engineer|architect|consultant|specialist|analyst)/i,
+  /salesforce\s+(?:admin|administrator|developer|engineer|architect|consultant|contractor|specialist|analyst)/i,
   // Platform ownership: "manage/own/administer ... Salesforce"
   /(?:manage|administer|own|maintain|build|implement|configure|customize|optimize|oversee)\s+[^.;]*salesforce/i,
   // Salesforce platform context
@@ -1645,7 +1649,7 @@ const QUALIFYING_PATTERNS = [
 ];
 
 // Dedicated Salesforce role titles — these are what we want
-const DEDICATED_SF_TITLE = /\b(?:salesforce|sfdc)\s+(?:admin|administrator|developer|engineer|architect|consultant|specialist|analyst|manager|lead|coordinator)\b/i;
+const DEDICATED_SF_TITLE = /\b(?:salesforce|sfdc)\s+(?:admin|administrator|developer|engineer|architect|consultant|contractor|specialist|analyst|manager|lead|coordinator)\b/i;
 
 // Roles where "Salesforce" appears in the title but the job is NOT a dedicated SF role.
 // e.g. "AWS Solutions Architect (Salesforce Integration)" or "Java Developer - Salesforce Team"
