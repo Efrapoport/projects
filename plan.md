@@ -16,18 +16,27 @@ Create `src/lib/si-signals.ts` — the core detection logic.
 | **Hiring SF consultant/contractor** | +25 | Job title contains "consultant", "contractor", "contract", "freelance" + Salesforce keywords |
 | **Staffing agency posting SF role for company** | +20 | Job posted by known staffing agency (Robert Half, TEKsystems, Apex, etc.) with client company name |
 | **"Managed services" language in job posts** | +15 | Description mentions "managed services", "outsourced administration", "third-party support" |
-| **SI partner job posting mentioning client** | +20 | Job posted by known SI (Deloitte, Accenture, Slalom, Cognizant, etc.) mentioning company as client |
+| **Small SI job posting mentioning client** | +20 | Job posted by a small/niche SI mentioning company as client (excludes Big 4/5) |
 | **Salesforce technographic signal + no FTE postings** | +20 | Company detected using SF (BuiltWith/DNS) but has zero full-time SF role postings in 12 months |
 | **Contract-to-hire or temp SF roles** | +15 | Job posts with "contract-to-hire", "temp", "6-month engagement", "SOW-based" |
 | **Multiple short-term SF roles over time** | +10 | Pattern of repeated short-term SF role postings (churn = no retention = no in-house) |
 | **RFP/procurement for SF services** | +10 | Public RFP mentions for "Salesforce implementation", "SF managed services" |
 | **Small IT headcount + SF usage** | +10 | Company uses SF but LinkedIn shows <3 people with IT/tech titles |
+| **Using enterprise SI (EXCLUDE)** | -100 | If signals point to Big 4/5 SI involvement, disqualify the lead entirely |
 
-### Known SI firms list (for matching):
-Maintain a curated list in the module: Deloitte Digital, Accenture, Slalom, Cognizant, Wipro, Infosys, IBM, Capgemini, PwC, KPMG, EY, Silverline, Coastal Cloud, Appirio/Wipro, Torrent Consulting, Penrod, Traction on Demand, Simplus, Publicis Sapient, plus ~20 more niche SF SIs.
+### Known SI firms list (for matching) — LONGTAIL FOCUS:
+We are **not** targeting companies using Big 4/5 SIs (Deloitte, Accenture, Cognizant, Wipro, etc.) — those are enterprise accounts with big budgets and long contracts we can't displace.
 
-### Known staffing agencies list:
-Robert Half, TEKsystems, Apex Systems, Kforce, Insight Global, Hays, Modis/Akkodis, Harvey Nash, Randstad, etc.
+Instead, target companies using **small/niche SIs and independent consultants**:
+
+**Small SF-focused SIs** (~5-50 employees): Coastal Cloud, Penrod, Torrent Consulting, Kicksaw, Neocol, Plative, Roycon, Demand Chain, Traction on Demand, Simplus, Cloud Giants, OpFocus, Galvin Technologies, CopperHill Consulting, RelationEdge, Aptaria, Girikon, Corrao Group, Webner Solutions, Algoworks, etc.
+
+**Solo/freelance consultants**: Detected via patterns like "independent Salesforce consultant", freelance platforms (Upwork, Toptal), or very small consultancies (<10 people).
+
+**Staffing agencies** (placing contract SF resources): Robert Half, TEKsystems, Apex Systems, Kforce, Insight Global, Hays, Modis/Akkodis, Harvey Nash, Randstad, etc.
+
+### Exclusion list (DO NOT target these companies' clients):
+Deloitte Digital, Accenture, Slalom, Cognizant, Wipro, Infosys, IBM Consulting, Capgemini, PwC, KPMG, EY, Publicis Sapient, McKinsey Digital — if a company is using one of these as their SI, they're enterprise and out of scope.
 
 ---
 
@@ -90,7 +99,9 @@ interface SISignal {
 - Sum signal weights, cap at 100
 - Bonus +10 if multiple distinct SIs detected (fragmented = no ownership)
 - Bonus +10 if pattern spans 6+ months (entrenched dependency)
+- **Auto-disqualify** if any Big 4/5 enterprise SI is detected as the partner (score → 0, filtered out)
 - Minimum threshold: 30 to appear in results
+- Ideal targets: companies using 1-2 person consultancies, freelancers, or small SF shops
 
 ---
 
@@ -111,10 +122,10 @@ Create `src/components/SIDashboard.tsx` — the main container for the new tab:
 ### 4c. SI Outreach Templates
 Create outreach templates in `src/lib/si-outreach-templates.ts`:
 
-**Template 1 — "Cost Savings"**: Pitch reducing SI dependency costs by hiring in-house
-**Template 2 — "Control & Speed"**: Pitch faster iteration and institutional knowledge with in-house team
-**Template 3 — "Risk Reduction"**: Pitch reducing vendor lock-in and single-point-of-failure risks
-**Template 4 — "Hybrid Model"**: Pitch keeping SI for projects but adding in-house for day-to-day
+**Template 1 — "Cost Savings"**: "You're paying a small consultancy $150-250/hr for routine admin — a dedicated hire pays for itself in months"
+**Template 2 — "Control & Speed"**: "Your consultant handles tickets in their queue — an in-house admin fixes things in minutes, not days"
+**Template 3 — "Consultant Dependency Risk"**: "What happens when your freelancer takes another client? Your entire SF instance has no one who knows it"
+**Template 4 — "Outgrowing Your SI"**: "Small SIs are great to get started, but at your stage you need someone who lives in your business, not visits it"
 
 Each template takes: contact name, company name, SI partner name(s), estimated complexity, industry.
 
