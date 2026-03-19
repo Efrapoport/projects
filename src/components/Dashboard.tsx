@@ -16,6 +16,8 @@ import { OutreachModal } from "./OutreachModal";
 import { RefreshCw, Cloud, Mail, AlertTriangle, Loader2, Handshake, LogIn, LogOut, User, Sparkles } from "lucide-react";
 import { HealthCheckButton } from "./HealthCheck";
 import { InvestorManager } from "./InvestorManager";
+import { TabBar, DashboardTab } from "./TabBar";
+import { SIDashboard } from "./SIDashboard";
 
 interface ApiResponse {
   leads: Lead[];
@@ -33,6 +35,7 @@ export function Dashboard({ initialData }: DashboardProps) {
   const { user, signIn, signOut } = useAuth();
   const { trackedIds } = useInvestors();
   const hasInitial = !!(initialData?.leads?.length);
+  const [activeTab, setActiveTab] = useState<DashboardTab>("first-admin");
 
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   // allLeads stores the FULL unfiltered dataset; filters are applied client-side
@@ -387,6 +390,16 @@ export function Dashboard({ initialData }: DashboardProps) {
       {/* Main Content */}
       <main className="max-w-[1600px] mx-auto px-4 py-4">
         <div className="space-y-4">
+          {/* Tab Navigation */}
+          <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
+
+          {/* SI-Dependent Tab */}
+          {activeTab === "si-dependent" && (
+            <SIDashboard />
+          )}
+
+          {/* First-Admin Tab (existing content) */}
+          {activeTab !== "si-dependent" && <>
           {/* Pipeline error banner */}
           {pipelineError && (
             <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2 flex items-center justify-between">
@@ -549,6 +562,7 @@ export function Dashboard({ initialData }: DashboardProps) {
               </div>
             )}
           </div>
+        </>}
         </div>
       </main>
 

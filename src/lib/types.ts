@@ -128,6 +128,48 @@ export interface InvestorRelationship {
   confidence: "high" | "medium" | "low";
 }
 
+// ── SI-Dependent Lead Types ─────────────────────────────────────────
+
+export type SISignalCategory =
+  | "consultant_hiring"
+  | "staffing_agency"
+  | "si_partner_posting"
+  | "managed_services"
+  | "no_fte_history"
+  | "contract_pattern"
+  | "rfp_signal"
+  | "small_it_team";
+
+export interface SISignal {
+  id: string;
+  category: SISignalCategory;
+  source: string;
+  title: string;
+  description: string;
+  detectedAt: string;
+  weight: number;
+  url?: string;
+  siPartnerName?: string;
+  clientCompanyExtracted?: string;
+}
+
+export type SIRelationshipType = "full_outsource" | "staff_augmentation" | "project_based";
+export type SFComplexity = "basic" | "moderate" | "complex";
+
+export interface SIDependentLead {
+  id: string;
+  company: Company;
+  dependencyScore: number; // 0-100
+  signals: SISignal[];
+  knownSIPartners: string[];
+  estimatedSFComplexity: SFComplexity;
+  siRelationshipType: SIRelationshipType;
+  contacts: Contact[];
+  hiringManager?: HiringManager;
+  firstDetected: string;
+  lastUpdated: string;
+}
+
 // ── Email Digest Types ───────────────────────────────────────────────
 
 export interface DigestConfig {
