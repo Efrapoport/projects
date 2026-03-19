@@ -48,10 +48,14 @@ const MEDIUM_WEIGHT_JD_KEYWORDS = [
 export function scoreSignal(signal: Signal): number {
   let score = 0;
 
-  // High-weight: First-time Salesforce job posting with "first admin" indicators
+  // Job posting signals always get a base score — a real Salesforce job
+  // posting that passed the relevance filter is inherently valuable.
   if (signal.category === "job_posting") {
+    score += 15; // base score for any qualified job posting
+
     const text = (signal.description + " " + (signal.raw || "")).toLowerCase();
 
+    // Bonus: First-time Salesforce indicators ("greenfield", "first admin", etc.)
     for (const kw of HIGH_WEIGHT_JD_KEYWORDS) {
       if (text.includes(kw)) {
         score += HIGH_WEIGHT;
@@ -59,6 +63,7 @@ export function scoreSignal(signal: Signal): number {
       }
     }
 
+    // Bonus: Explicit Salesforce role keywords
     for (const kw of MEDIUM_WEIGHT_JD_KEYWORDS) {
       if (text.includes(kw)) {
         score += MEDIUM_WEIGHT;
