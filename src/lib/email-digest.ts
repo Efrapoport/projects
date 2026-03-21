@@ -4,8 +4,11 @@ import { Lead } from "./types";
  * Generate an HTML email digest of the top leads.
  */
 export function generateDigestHtml(leads: Lead[], date: Date): string {
+  // Use a low threshold so leads aren't silently excluded — most leads
+  // without enrichment data (contacts, investors) score 25-45, and the
+  // digest should always contain content when there are valid leads.
   const topLeads = leads
-    .filter((l) => l.score >= 40)
+    .filter((l) => l.score >= 15)
     .sort((a, b) => b.score - a.score)
     .slice(0, 15);
 
@@ -91,6 +94,7 @@ export function generateDigestHtml(leads: Lead[], date: Date): string {
       <div style="padding: 16px; border-bottom: 1px solid #e5e7eb;">
         <h2 style="margin: 0; font-size: 14px; font-weight: 600; color: #374151; text-transform: uppercase; letter-spacing: 0.05em;">Today's Top Leads</h2>
       </div>
+      ${topLeads.length > 0 ? `
       <table style="width: 100%; border-collapse: collapse;">
         <thead>
           <tr style="background: #f9fafb;">
@@ -103,7 +107,11 @@ export function generateDigestHtml(leads: Lead[], date: Date): string {
         <tbody>
           ${leadRows}
         </tbody>
-      </table>
+      </table>` : `
+      <div style="padding: 24px; text-align: center; color: #6b7280;">
+        <p style="font-size: 14px; margin: 0;">No leads matched the digest criteria today.</p>
+        <p style="font-size: 12px; margin: 8px 0 0;">Check the dashboard for the full list of leads.</p>
+      </div>`}
     </div>
 
     <!-- Top Lead Details -->

@@ -179,12 +179,13 @@ export function Dashboard({ initialData }: DashboardProps) {
   }, []);
 
   // Fetch on mount only if no server-provided data
-  useState(() => {
+  useEffect(() => {
     if (!hasInitial) {
       fetchLeads();
     }
     fetchPipelineData();
-  });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Pipeline error toast
   const [pipelineError, setPipelineError] = useState<string | null>(null);
