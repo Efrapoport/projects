@@ -175,7 +175,7 @@ function matchesContractPattern(text: string): boolean {
  *  Patterns: "for our client [Company]", "on behalf of [Company]", "[Company] (client)" */
 function extractClientCompany(description: string): string | null {
   const patterns = [
-    /(?:for\s+(?:our\s+)?client|on\s+behalf\s+of|client\s*:\s*)\s+([A-Z][A-Za-z0-9\s&.,'()-]{2,40}?)(?:\.|,|\s+in\s|\s+is\s|\s+located|\s+based|$)/i,
+    /(?:(?:for|with|support(?:ing)?)\s+(?:our\s+)?client|on\s+behalf\s+of|client\s*:\s*)\s+([A-Z][A-Za-z0-9\s&.,'()-]{2,40}?)(?:\.|,|\s+in\s|\s+is\s|\s+located|\s+based|\s+who\s|\s+has\s|\s+doesn|$)/i,
     /([A-Z][A-Za-z0-9\s&.,'()-]{2,40}?)\s+\((?:client|end[- ]client|customer)\)/i,
     /working\s+(?:with|at|for)\s+([A-Z][A-Za-z0-9\s&.,'()-]{2,40}?)(?:'s)?\s+(?:salesforce|sfdc|crm)/i,
   ];
